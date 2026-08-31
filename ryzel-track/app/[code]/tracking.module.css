@@ -1,0 +1,232 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+}
+
+.card {
+  width: 100%;
+  max-width: 560px;
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 32px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.06);
+  animation: cardIn 0.5s ease both;
+}
+
+@keyframes cardIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.headerRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.trackingCode {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.carrier {
+  font-size: 13px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.statusActive {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.statusDelivered {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.checkmark {
+  animation: pop 0.4s ease 0.2s both;
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0);
+  }
+  70% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.routeRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.routePoint {
+  flex-shrink: 0;
+  max-width: 40%;
+}
+
+.routeLabel {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #9ca3af;
+  margin-bottom: 2px;
+}
+
+.routeValue {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.routeLine {
+  flex: 1;
+  height: 3px;
+  background: #e5e7eb;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.routeLineFill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #4338ca);
+  border-radius: 999px;
+  transition: width 0.6s ease;
+}
+
+.packageDesc {
+  font-size: 14px;
+  color: #4b5563;
+  background: #f9fafb;
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.eta {
+  font-size: 14px;
+  color: #4b5563;
+  margin-bottom: 24px;
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+}
+
+.timelineItem {
+  display: flex;
+  gap: 16px;
+  opacity: 0;
+  transform: translateX(-8px);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.timelineItemVisible {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.timelineDotWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.timelineDot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #d1d5db;
+  margin-top: 4px;
+}
+
+.timelineDotLatest {
+  background: #4338ca;
+  box-shadow: 0 0 0 4px rgba(67, 56, 202, 0.15);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 4px rgba(67, 56, 202, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(67, 56, 202, 0.08);
+  }
+}
+
+.timelineConnector {
+  width: 2px;
+  flex: 1;
+  background: #e5e7eb;
+  min-height: 32px;
+  margin-top: 2px;
+}
+
+.timelineContent {
+  padding-bottom: 24px;
+}
+
+.timelineStatus {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.timelineLocation {
+  font-size: 13px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.timelineNote {
+  font-size: 13px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.timelineTime {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-top: 4px;
+}
+
+.notFound {
+  text-align: center;
+  padding: 64px 16px;
+  color: #6b7280;
+}

@@ -1,0 +1,63 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ryzel-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Custom domain for the API. Point api.ryzel.online at this Worker from
+  // the Cloudflare dashboard (Workers & Pages -> ryzel-api -> Settings ->
+  // Domains & Routes -> Add Custom Domain) once the zone is on Cloudflare.
+  "routes": [
+    { "pattern": "api.ryzel.online", "custom_domain": true }
+  ],
+
+  // Hyperdrive pools + accelerates the connection to your existing Postgres
+  // (Supabase). Create this via:
+  //   wrangler hyperdrive create ryzel-db --connection-string="<your Supabase Postgres URL>"
+  // then paste the returned "id" below.
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "a1258bac57464d53bb4cfe9c28ed600e"
+    }
+  ],
+
+  // Rate limiting bindings (replaces slowapi from the Python backend).
+  // Each binding carries one fixed limit+period, so distinct limits need
+  // distinct bindings. namespace_id is any integer unique within your
+  // account — these five are arbitrary but must not collide with any
+  // other Worker's rate limit bindings on the same account.
+  "unsafe": {
+    "bindings": [
+      { "name": "RATE_LIMIT_ORDERS_PRICE", "type": "ratelimit", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } },
+      { "name": "RATE_LIMIT_ORDERS_BUY", "type": "ratelimit", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } },
+      { "name": "RATE_LIMIT_ORDERS_CHECK", "type": "ratelimit", "namespace_id": "1003", "simple": { "limit": 40, "period": 60 } },
+      { "name": "RATE_LIMIT_ORDERS_CANCEL", "type": "ratelimit", "namespace_id": "1004", "simple": { "limit": 20, "period": 60 } },
+      { "name": "RATE_LIMIT_PAYMENTS_INIT", "type": "ratelimit", "namespace_id": "1005", "simple": { "limit": 5, "period": 60 } }
+    ]
+  },
+
+  // Non-secret config. Secrets (API keys, JWT secret, etc.) are set via
+  // `wrangler secret put <NAME>` instead — see DEPLOY.md — and are NOT
+  // listed here since this file is safe to commit to git.
+    "vars": {
+    "ENVIRONMENT": "production",
+    "SUPABASE_URL": "https://iuheykqammmxrtpamkpg.supabase.co",
+    "PROVIDER": "fivesim",
+    "PROVIDER_BASE_URL": "https://5sim.net/v1",
+    "PROVIDER_FALLBACK": "",
+    "ADMIN_EMAILS": "mosesoluwa2005@gmail.com",
+    "MARKUP_PERCENT": "45.0",
+    "MARKUP_FLAT_NGN": "50.0",
+    "MIN_PRICE_NGN": "150.0",
+    "USD_NGN_RATE": "1600.0",
+    "ORDER_TIMEOUT_SECONDS": "600",
+    "INVOICE_FEE_NGN": "50.0",
+    "TRACKER_FEE_NGN": "50.0",
+    "KORAPAY_REDIRECT_URL": "https://ryzel.online/wallet/topup/complete",
+    "BREVO_SENDER_EMAIL": "reply.smsone@gmail.com",
+    "BREVO_SENDER_NAME": "Ryzel",
+    "CORS_ORIGINS": "https://ryzel.online,https://www.ryzel.online,https://track.ryzel.online,http://localhost:3000"
+  }
+}
