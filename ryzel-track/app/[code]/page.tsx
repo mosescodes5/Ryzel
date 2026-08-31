@@ -15,8 +15,9 @@ async function getShipment(code: string) {
   return res.json();
 }
 
-export default async function TrackingPage({ params }: { params: { code: string } }) {
-  const shipment = await getShipment(params.code);
+export default async function TrackingPage({ params }: { params: Promise<{ code: string }> }) {
+  const { code } = await params;
+  const shipment = await getShipment(code);
 
   if (!shipment) {
     return (
