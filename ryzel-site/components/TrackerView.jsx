@@ -5,6 +5,7 @@ import { Button, Card, Field, Input, Select, Pill } from "@/components/ui";
 import * as api from "@/lib/api";
 import { isInsufficientBalanceError } from "@/lib/errors";
 import { CARRIER_THEMES, carrierTheme, STATUS_LABELS } from "@/lib/carrierThemes";
+import { CURRENCIES, LANGUAGES } from "@/lib/currencies";
 
 const STATUS_TONE = {
   label_created: "neutral",
@@ -19,9 +20,11 @@ function formatNgn(amount) {
   return `₦${Number(amount).toLocaleString("en-NG")}`;
 }
 
-function siteOrigin() {
-  if (typeof window !== "undefined") return window.location.origin;
-  return "https://ryzel.online";
+// The tracking page is now its own standalone deployment at
+// track.ryzel.online, entirely separate from this site — no more
+// building the link off window.location.origin + /track/...
+function trackingLink(code) {
+  return `https://track.ryzel.online/${code}`;
 }
 
 export default function TrackerView({ onBalanceChange, onInsufficientBalance, trackerFeeNgn = 50 }) {
@@ -39,6 +42,8 @@ export default function TrackerView({ onBalanceChange, onInsufficientBalance, tr
   const [destination, setDestination] = useState("");
   const [packageDescription, setPackageDescription] = useState("");
   const [estimatedDelivery, setEstimatedDelivery] = useState("");
+  const [currency, setCurrency] = useState("NGN");
+  const [language, setLanguage] = useState("en");
 
   const load = () => {
     setLoading(true);
@@ -73,6 +78,8 @@ export default function TrackerView({ onBalanceChange, onInsufficientBalance, tr
         destination: destination.trim(),
         package_description: packageDescription.trim() || null,
         estimated_delivery: estimatedDelivery ? new Date(estimatedDelivery).toISOString() : null,
+        currency,
+        language,
       });
 
       setTrackers((prev) => [tracker, ...prev]);
@@ -86,6 +93,8 @@ export default function TrackerView({ onBalanceChange, onInsufficientBalance, tr
       setDestination("");
       setPackageDescription("");
       setEstimatedDelivery("");
+      setCurrency("NGN");
+      setLanguage("en");
     } catch (e) {
       setError(e.message);
     } finally {
@@ -160,6 +169,23 @@ export default function TrackerView({ onBalanceChange, onInsufficientBalance, tr
             </Field>
             <Field label="Destination">
               <Input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="Abuja, Nigeria" required />
+            </Field>
+          </div>
+
+          <div className="grid sm:grid-cols-2 gap-x-4">
+            <Field label="Currency">
+              <Select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                {CURRENCIES.map((c) => (
+                  <option key={c.code} value={c.code}>{c.label}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Tracking page language">
+              <Select value={language} onChange={(e) => setLanguage(e.target.value)}>
+                {LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>{l.label}</option>
+                ))}
+              </Select>
             </Field>
           </div>
 
@@ -246,7 +272,7 @@ function TrackerDetail({ tracker, onBack, onAddEvent, onDelete }) {
   const [copied, setCopied] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const link = `${siteOrigin()}/track/${tracker.tracking_code}`;
+  const link = trackingLink(tracker.tracking_code);
 
   async function copyLink() {
     await navigator.clipboard.writeText(link);
@@ -302,6 +328,8 @@ function TrackerDetail({ tracker, onBack, onAddEvent, onDelete }) {
           <div><span className="text-ink-soft">Destination:</span> {tracker.destination}</div>
           <div><span className="text-ink-soft">Sender:</span> {tracker.sender_name || "—"}</div>
           <div><span className="text-ink-soft">Recipient:</span> {tracker.recipient_name || "—"}</div>
+          <div><span className="text-ink-soft">Currency:</span> {tracker.currency || "NGN"}</div>
+          <div><span className="text-ink-soft">Language:</span> {tracker.language || "en"}</div>
         </div>
       </Card>
 

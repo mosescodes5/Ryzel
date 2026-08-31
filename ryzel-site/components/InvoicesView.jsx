@@ -4,7 +4,11 @@ import { useEffect, useState } from "react";
 import { Button, Card, Field, Input, Select, Pill } from "@/components/ui";
 import * as api from "@/lib/api";
 import { isInsufficientBalanceError } from "@/lib/errors";
+import { CURRENCIES, LANGUAGES, formatCurrency } from "@/lib/currencies";
 
+// The platform fee is always charged from the NGN wallet regardless of
+// what currency the invoice itself is issued in — kept separate from
+// formatCurrency, which renders the invoice's own totals.
 function formatNgn(amount) {
   return `₦${Number(amount).toLocaleString("en-NG")}`;
 }
@@ -32,6 +36,8 @@ export default function InvoicesView({ onBalanceChange, onInsufficientBalance, i
   const [taxPercent, setTaxPercent] = useState(0);
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState([{ ...EMPTY_ITEM }]);
+  const [currency, setCurrency] = useState("NGN");
+  const [language, setLanguage] = useState("en");
 
   const load = () => {
     setLoading(true);
@@ -86,7 +92,8 @@ export default function InvoicesView({ onBalanceChange, onInsufficientBalance, i
         client_name: clientName.trim(),
         client_email: clientEmail.trim() || null,
         client_address: clientAddress.trim() || null,
-        currency: "NGN",
+        currency,
+        language,
         line_items: items.map((it) => ({
           description: it.description,
           quantity: Number(it.quantity) || 1,
@@ -109,6 +116,8 @@ export default function InvoicesView({ onBalanceChange, onInsufficientBalance, i
       setTaxPercent(0);
       setNotes("");
       setItems([{ ...EMPTY_ITEM }]);
+      setCurrency("NGN");
+      setLanguage("en");
     } catch (e) {
       setError(e.message);
     } finally {
@@ -154,6 +163,23 @@ export default function InvoicesView({ onBalanceChange, onInsufficientBalance, i
           <Field label="Client address (optional)">
             <Input value={clientAddress} onChange={(e) => setClientAddress(e.target.value)} placeholder="123 Marina Road, Lagos" />
           </Field>
+
+          <div className="grid sm:grid-cols-2 gap-x-4">
+            <Field label="Currency">
+              <Select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                {CURRENCIES.map((c) => (
+                  <option key={c.code} value={c.code}>{c.label}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Invoice language">
+              <Select value={language} onChange={(e) => setLanguage(e.target.value)}>
+                {LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>{l.label}</option>
+                ))}
+              </Select>
+            </Field>
+          </div>
 
           <Field label="Line items">
             <div className="flex flex-col gap-2">
@@ -216,9 +242,9 @@ export default function InvoicesView({ onBalanceChange, onInsufficientBalance, i
 
           <div className="flex items-center justify-between border-t border-line mt-2 pt-4">
             <div className="text-[0.85rem] text-ink-soft">
-              Subtotal {formatNgn(subtotal)} · Tax {formatNgn(taxAmount)}
+              Subtotal {formatCurrency(subtotal, currency)} · Tax {formatCurrency(taxAmount, currency)}
               <div className="font-display font-bold text-[1.05rem] text-ink">
-                Total {formatNgn(total)}
+                Total {formatCurrency(total, currency)}
               </div>
             </div>
             <Button type="submit" disabled={creating}>
@@ -258,7 +284,7 @@ export default function InvoicesView({ onBalanceChange, onInsufficientBalance, i
                   <div className="text-[0.8rem] text-ink-soft">{new Date(inv.created_at).toLocaleDateString()}</div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="font-mono text-[0.9rem]">{formatNgn(inv.total)}</span>
+                  <span className="font-mono text-[0.9rem]">{formatCurrency(inv.total, inv.currency)}</span>
                   <Pill tone={STATUS_TONE[inv.status]}>{inv.status}</Pill>
                   <button
                     onClick={(e) => {
@@ -333,8 +359,8 @@ function InvoiceDetail({ invoice, onBack, onStatusChange }) {
                 <tr key={idx} className="border-b border-line/50">
                   <td className="py-2">{it.description}</td>
                   <td className="py-2 text-right">{it.quantity}</td>
-                  <td className="py-2 text-right">{formatNgn(it.unit_price)}</td>
-                  <td className="py-2 text-right font-mono">{formatNgn(it.quantity * it.unit_price)}</td>
+                  <td className="py-2 text-right">{formatCurrency(it.unit_price, invoice.currency)}</td>
+                  <td className="py-2 text-right font-mono">{formatCurrency(it.quantity * it.unit_price, invoice.currency)}</td>
                 </tr>
               ))}
             </tbody>
@@ -344,15 +370,15 @@ function InvoiceDetail({ invoice, onBack, onStatusChange }) {
             <div className="w-full max-w-[220px] flex flex-col gap-1 text-[0.9rem]">
               <div className="flex justify-between text-ink-soft">
                 <span>Subtotal</span>
-                <span className="font-mono">{formatNgn(invoice.subtotal)}</span>
+                <span className="font-mono">{formatCurrency(invoice.subtotal, invoice.currency)}</span>
               </div>
               <div className="flex justify-between text-ink-soft">
                 <span>Tax ({invoice.tax_percent}%)</span>
-                <span className="font-mono">{formatNgn(invoice.tax_amount)}</span>
+                <span className="font-mono">{formatCurrency(invoice.tax_amount, invoice.currency)}</span>
               </div>
               <div className="flex justify-between font-bold text-[1.05rem] border-t border-line pt-2 mt-1">
                 <span>Total</span>
-                <span className="font-mono">{formatNgn(invoice.total)}</span>
+                <span className="font-mono">{formatCurrency(invoice.total, invoice.currency)}</span>
               </div>
             </div>
           </div>
