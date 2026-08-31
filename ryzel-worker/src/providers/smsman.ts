@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "./fetchWithTimeout";
 import { Offer, ProviderLookupError, ReservedNumber, SMSProvider } from "./types";
 
 const BASE_URL = "https://api.sms-man.com/control";
@@ -21,7 +22,7 @@ export class SmsManProvider implements SMSProvider {
     url.searchParams.set("country_id", country);
     url.searchParams.set("application_id", service);
 
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url);
     if (!response.ok) throw new Error(`SMS-Man limits request failed: ${response.status}`);
     const data: any[] = await response.json();
 
@@ -36,7 +37,7 @@ export class SmsManProvider implements SMSProvider {
     url.searchParams.set("country_id", country);
     url.searchParams.set("application_id", service);
 
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url);
     if (!response.ok) throw new Error(`SMS-Man get-number request failed: ${response.status}`);
     const data: any = await response.json();
 
@@ -55,7 +56,7 @@ export class SmsManProvider implements SMSProvider {
     url.searchParams.set("token", this.token);
     url.searchParams.set("request_id", providerOrderId);
 
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url);
     if (!response.ok) throw new Error(`SMS-Man get-sms request failed: ${response.status}`);
     const data: any = await response.json();
     return data.sms_code ?? null;
@@ -67,7 +68,7 @@ export class SmsManProvider implements SMSProvider {
     url.searchParams.set("request_id", providerOrderId);
     url.searchParams.set("status", "reject");
 
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url);
     if (!response.ok) throw new Error(`SMS-Man set-status request failed: ${response.status}`);
   }
 }

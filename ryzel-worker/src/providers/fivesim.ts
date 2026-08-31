@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "./fetchWithTimeout";
 import { Offer, ProviderLookupError, ReservedNumber, SMSProvider } from "./types";
 
 export class FiveSimProvider implements SMSProvider {
@@ -16,7 +17,7 @@ export class FiveSimProvider implements SMSProvider {
   /** Country catalog for populating the buy screen's dropdowns — browsing only, no auth needed. */
   async getCountries(): Promise<Array<{ code: string; name: string; iso: string | null; prefix: string | null }>> {
     const url = `${this.baseUrl}/guest/countries`;
-    const response = await fetch(url, { headers: { Accept: "application/json" } });
+    const response = await fetchWithTimeout(url, { headers: { Accept: "application/json" } });
     if (!response.ok) {
       throw new Error(`5SIM countries request failed: ${response.status} ${await response.text()}`);
     }
@@ -46,7 +47,7 @@ export class FiveSimProvider implements SMSProvider {
     operator = operator.trim().toLowerCase();
 
     const url = `${this.baseUrl}/guest/products/${country}/${operator}`;
-    const response = await fetch(url, { headers: { Accept: "application/json" } });
+    const response = await fetchWithTimeout(url, { headers: { Accept: "application/json" } });
     if (!response.ok) {
       throw new Error(`5SIM services request failed: ${response.status} ${await response.text()}`);
     }
@@ -73,7 +74,7 @@ export class FiveSimProvider implements SMSProvider {
     url.searchParams.set("country", country);
     url.searchParams.set("product", service);
 
-    const response = await fetch(url, { headers: { Accept: "application/json" } });
+    const response = await fetchWithTimeout(url, { headers: { Accept: "application/json" } });
     if (!response.ok) {
       throw new ProviderLookupError(`No numbers available for ${service}/${country}: ${await response.text()}`);
     }
@@ -118,7 +119,7 @@ export class FiveSimProvider implements SMSProvider {
     operator = (operator || "any").trim().toLowerCase();
 
     const url = `${this.baseUrl}/user/buy/activation/${country}/${operator}/${service}`;
-    const response = await fetch(url, { headers: this.headers });
+    const response = await fetchWithTimeout(url, { headers: this.headers });
 
     if (!response.ok) {
       let errorMessage: string;
@@ -141,7 +142,7 @@ export class FiveSimProvider implements SMSProvider {
 
   async checkSms(providerOrderId: string): Promise<string | null> {
     const url = `${this.baseUrl}/user/check/${providerOrderId}`;
-    const response = await fetch(url, { headers: this.headers });
+    const response = await fetchWithTimeout(url, { headers: this.headers });
     if (!response.ok) {
       throw new Error(`5SIM SMS check failed: ${response.status} ${await response.text()}`);
     }
@@ -152,7 +153,7 @@ export class FiveSimProvider implements SMSProvider {
 
   async cancelOrder(providerOrderId: string): Promise<void> {
     const url = `${this.baseUrl}/user/cancel/${providerOrderId}`;
-    const response = await fetch(url, { headers: this.headers });
+    const response = await fetchWithTimeout(url, { headers: this.headers });
     if (!response.ok) {
       throw new Error(`5SIM cancel failed: ${response.status} ${await response.text()}`);
     }

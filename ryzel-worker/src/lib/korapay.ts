@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../providers/fetchWithTimeout";
 import type { AppSettings } from "./config";
 
 const BASE_URL = "https://api.korapay.com/merchant/api/v1";
@@ -37,7 +38,7 @@ export async function initializeCharge(
 
   let response: Response;
   try {
-    response = await fetch(`${BASE_URL}/charges/initialize`, {
+    response = await fetchWithTimeout(`${BASE_URL}/charges/initialize`, {
       method: "POST",
       headers: headers(settings),
       body: JSON.stringify(payload),
@@ -72,7 +73,7 @@ export async function initializeCharge(
 export async function verifyTransaction(settings: AppSettings, reference: string): Promise<any> {
   let response: Response;
   try {
-    response = await fetch(`${BASE_URL}/charges/${reference}`, { headers: headers(settings) });
+    response = await fetchWithTimeout(`${BASE_URL}/charges/${reference}`, { headers: headers(settings) });
   } catch (e) {
     throw new KorapayError(`Could not reach Korapay: ${(e as Error).message}`);
   }
