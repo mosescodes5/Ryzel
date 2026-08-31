@@ -54,10 +54,10 @@ export default function TrackerView({ onBalanceChange, onInsufficientBalance, tr
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => {
-    load();
-  }, []);
-
+useEffect(() => {
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount; setState only happens after the async request resolves, not synchronously
+  load();
+}, []);
   async function handleCreate(e) {
     e.preventDefault();
     setError("");

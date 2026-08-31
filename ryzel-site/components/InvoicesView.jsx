@@ -49,8 +49,9 @@ export default function InvoicesView({ onBalanceChange, onInsufficientBalance, i
   };
 
   useEffect(() => {
-    load();
-  }, []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount; setState only happens after the async request resolves, not synchronously
+  load();
+}, []);
 
   const subtotal = items.reduce(
     (sum, it) => sum + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0),
