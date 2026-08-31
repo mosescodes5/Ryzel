@@ -46,6 +46,13 @@
   margin-top: 2px;
 }
 
+.carrierLogo {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  margin-bottom: 4px;
+}
+
 .statusBadge {
   display: inline-flex;
   align-items: center;
@@ -58,8 +65,8 @@
 }
 
 .statusActive {
-  background: #eef2ff;
-  color: #4338ca;
+  background: var(--badge-bg);
+  color: var(--accent);
 }
 
 .statusDelivered {
@@ -121,7 +128,7 @@
 
 .routeLineFill {
   height: 100%;
-  background: linear-gradient(90deg, #6366f1, #4338ca);
+  background: linear-gradient(90deg, var(--accent-light), var(--accent));
   border-radius: 999px;
   transition: width 0.6s ease;
 }
@@ -176,17 +183,17 @@
 }
 
 .timelineDotLatest {
-  background: #4338ca;
-  box-shadow: 0 0 0 4px rgba(67, 56, 202, 0.15);
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-glow);
   animation: pulse 1.8s ease-in-out infinite;
 }
 
 @keyframes pulse {
   0%, 100% {
-    box-shadow: 0 0 0 4px rgba(67, 56, 202, 0.15);
+    box-shadow: 0 0 0 4px var(--accent-glow);
   }
   50% {
-    box-shadow: 0 0 0 8px rgba(67, 56, 202, 0.08);
+    box-shadow: 0 0 0 8px var(--accent-glow-soft);
   }
 }
 

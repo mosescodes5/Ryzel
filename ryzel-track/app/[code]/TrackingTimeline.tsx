@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import styles from "./tracking.module.css";
+import { getCarrierTheme } from "../lib/carrierThemes";
 
 interface TrackerEvent {
   status: string;
@@ -52,6 +53,7 @@ export default function TrackingTimeline({ shipment }: { shipment: PublicShipmen
   const events = [...shipment.events].sort(
     (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
   );
+  const theme = getCarrierTheme(shipment.carrier_style);
 
   useEffect(() => {
     // Reveal each event one at a time on load, most recent last — gives
@@ -65,11 +67,29 @@ export default function TrackingTimeline({ shipment }: { shipment: PublicShipmen
   const isDelivered = shipment.status === "delivered";
 
   return (
-    <div className={styles.card}>
+    <div
+      className={styles.card}
+      style={
+        {
+          "--accent": theme.accent,
+          "--accent-dark": theme.accentDark,
+          "--accent-light": theme.accent,
+          "--badge-bg": theme.badgeBg,
+          "--accent-glow": `${theme.accent}26`,
+          "--accent-glow-soft": `${theme.accent}14`,
+        } as React.CSSProperties
+      }
+    >
       <div className={styles.headerRow}>
         <div>
+          {theme.logoText ? (
+            <div className={styles.carrierLogo} style={{ color: theme.accent }}>
+              {theme.logoText}
+            </div>
+          ) : (
+            shipment.carrier_name && <div className={styles.carrier}>{shipment.carrier_name}</div>
+          )}
           <div className={styles.trackingCode}>{shipment.tracking_code}</div>
-          {shipment.carrier_name && <div className={styles.carrier}>{shipment.carrier_name}</div>}
         </div>
         <div className={`${styles.statusBadge} ${isDelivered ? styles.statusDelivered : styles.statusActive}`}>
           {isDelivered && <span className={styles.checkmark}>✓</span>}
