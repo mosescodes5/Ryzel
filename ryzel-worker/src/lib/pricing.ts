@@ -99,7 +99,7 @@ export async function savePricingConfig(
     .onConflictDoUpdate({ target: siteSettings.key, set: { value: JSON.stringify(normalized) } });
 }
 
-function pickTier(costNgn: number, tiers: PricingTier[]): PricingTier {
+export function pickTier(costNgn: number, tiers: PricingTier[]): PricingTier {
   const ordered = [...tiers].sort((a, b) => {
     const aInf = a.maxCostNgn === null ? 1 : 0;
     const bInf = b.maxCostNgn === null ? 1 : 0;
@@ -116,8 +116,12 @@ export function roundToNearest(value: number, nearest = 10): number {
   return Math.ceil(value / nearest) * nearest;
 }
 
-export async function priceForCustomer(costUsd: number, db: Db | null, settings: AppSettings): Promise<number> {
-  const cfg = await getPricingConfig(db, settings);
+/**
+ * Pure, synchronous price computation from an already-fetched pricing
+ * config. Use this when pricing multiple offers at once so the DB is
+ * only queried once (via getPricingConfig) instead of once per offer.
+ */
+export function priceFromConfig(costUsd: number, cfg: PricingConfig): number {
   const costNgn = costUsd * cfg.usdNgnRate;
   const tier = pickTier(costNgn, cfg.tiers);
 
@@ -126,6 +130,11 @@ export async function priceForCustomer(costUsd: number, db: Db | null, settings:
 
   const finalPrice = Math.max(withFlat, cfg.minPriceNgn);
   return roundToNearest(finalPrice);
+}
+
+export async function priceForCustomer(costUsd: number, db: Db | null, settings: AppSettings): Promise<number> {
+  const cfg = await getPricingConfig(db, settings);
+  return priceFromConfig(costUsd, cfg);
 }
 
 export async function marginBreakdown(costUsd: number, db: Db | null, settings: AppSettings) {

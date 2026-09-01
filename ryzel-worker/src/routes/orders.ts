@@ -180,54 +180,63 @@ orderRoutes.get("/:id", rateLimit("RATE_LIMIT_ORDERS_CHECK"), async (c) => {
   const settings = getSettings(c.env);
   const orderId = Number(c.req.param("id"));
 
-  return withDb(c, async (db) => {
-    const order = await db.query.orders.findFirst({ where: eq(orders.id, orderId) });
-    if (!order || order.userId !== user.id) throw new HTTPException(404, { message: "Order not found" });
+  // This route is polled repeatedly by the frontend while waiting for an
+  // SMS code, which made it the worst offender for pool exhaustion: it
+  // used to hold a DB connection open for the entire checkSms/cancelOrder
+  // network round-trip, on every single poll. Fixed the same way as
+  // /price and POST / above — short DB read, external call with no DB
+  // connection open, short DB write only if needed.
+  const order = await withDb(c, async (db) => {
+    const found = await db.query.orders.findFirst({ where: eq(orders.id, orderId) });
+    if (!found || found.userId !== user.id) throw new HTTPException(404, { message: "Order not found" });
+    return found;
+  });
 
-    if (order.status !== "pending") return c.json(serializeOrder(order));
+  if (order.status !== "pending") return c.json(serializeOrder(order));
 
-    const provider = getProviderByName(order.providerName, settings);
+  const provider = getProviderByName(order.providerName, settings);
 
-    if (new Date() > order.expiresAt) {
-      try {
-        await provider.cancelOrder(order.providerOrderId);
-      } catch {
-        // best-effort
-      }
+  if (new Date() > order.expiresAt) {
+    try {
+      await provider.cancelOrder(order.providerOrderId);
+    } catch {
+      // best-effort
+    }
+    return withDb(c, async (db) => {
       const refunded = await refund(db, order, user.id, "order_refund_timeout", "expired");
       return c.json(serializeOrder(refunded));
-    }
+    });
+  }
 
-    let code: string | null;
-    try {
-      code = await provider.checkSms(order.providerOrderId);
-    } catch (e) {
-      throw new HTTPException(502, { message: `Provider error: ${String((e as Error)?.message ?? e)}` });
-    }
+  let code: string | null;
+  try {
+    code = await provider.checkSms(order.providerOrderId);
+  } catch (e) {
+    throw new HTTPException(502, { message: `Provider error: ${String((e as Error)?.message ?? e)}` });
+  }
 
-    if (code) {
-      const [updated] = await db
-        .update(orders)
-        .set({ smsCode: code, status: "received", completedAt: new Date() })
-        .where(eq(orders.id, order.id))
-        .returning();
+  if (!code) return c.json(serializeOrder(order));
 
-      // Best-effort receipt — never fails the order, which has already
-      // succeeded and been paid for by this point.
-      const { subject, html } = orderReceiptEmail(
-        settings,
-        updated.service,
-        updated.country,
-        updated.phoneNumber,
-        updated.smsCode!,
-        updated.priceNgn
-      );
-      c.executionCtx.waitUntil(sendEmailSafe(settings, user.email, subject, html));
+  return withDb(c, async (db) => {
+    const [updated] = await db
+      .update(orders)
+      .set({ smsCode: code, status: "received", completedAt: new Date() })
+      .where(eq(orders.id, order.id))
+      .returning();
 
-      return c.json(serializeOrder(updated));
-    }
+    // Best-effort receipt — never fails the order, which has already
+    // succeeded and been paid for by this point.
+    const { subject, html } = orderReceiptEmail(
+      settings,
+      updated.service,
+      updated.country,
+      updated.phoneNumber,
+      updated.smsCode!,
+      updated.priceNgn
+    );
+    c.executionCtx.waitUntil(sendEmailSafe(settings, user.email, subject, html));
 
-    return c.json(serializeOrder(order));
+    return c.json(serializeOrder(updated));
   });
 });
 
@@ -236,21 +245,23 @@ orderRoutes.post("/:id/cancel", rateLimit("RATE_LIMIT_ORDERS_CANCEL"), async (c)
   const settings = getSettings(c.env);
   const orderId = Number(c.req.param("id"));
 
+  const order = await withDb(c, async (db) => {
+    const found = await db.query.orders.findFirst({ where: eq(orders.id, orderId) });
+    if (!found || found.userId !== user.id) throw new HTTPException(404, { message: "Order not found" });
+    if (found.status !== "pending") {
+      throw new HTTPException(400, { message: `Order already ${found.status}` });
+    }
+    return found;
+  });
+
+  const provider = getProviderByName(order.providerName, settings);
+  try {
+    await provider.cancelOrder(order.providerOrderId);
+  } catch (e) {
+    throw new HTTPException(502, { message: `Provider error: ${String((e as Error)?.message ?? e)}` });
+  }
+
   return withDb(c, async (db) => {
-    const order = await db.query.orders.findFirst({ where: eq(orders.id, orderId) });
-    if (!order || order.userId !== user.id) throw new HTTPException(404, { message: "Order not found" });
-
-    if (order.status !== "pending") {
-      throw new HTTPException(400, { message: `Order already ${order.status}` });
-    }
-
-    const provider = getProviderByName(order.providerName, settings);
-    try {
-      await provider.cancelOrder(order.providerOrderId);
-    } catch (e) {
-      throw new HTTPException(502, { message: `Provider error: ${String((e as Error)?.message ?? e)}` });
-    }
-
     const refunded = await refund(db, order, user.id, "order_refund_cancelled", "cancelled");
     return c.json(serializeOrder(refunded));
   });

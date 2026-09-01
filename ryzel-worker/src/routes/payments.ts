@@ -36,32 +36,36 @@ paymentRoutes.post("/initialize", requireAuth, rateLimit("RATE_LIMIT_PAYMENTS_IN
   // string) is what actually links this back to the user.
   const reference = `tp_${user.id.replace(/-/g, "").slice(0, 8)}_${randomHex(8)}`;
 
-  return withDb(c, async (db) => {
-    const [payment] = await db
+  const payment = await withDb(c, async (db) => {
+    const [row] = await db
       .insert(pendingPayments)
       .values({ reference, userId: user.id, amountNgn })
       .returning();
-
-    try {
-      const charge = await initializeCharge(settings, {
-        amountNgn,
-        customerEmail: user.email,
-        reference,
-        redirectUrl: settings.korapayRedirectUrl,
-      });
-      return c.json({ reference, checkout_url: charge.checkout_url });
-    } catch (e) {
-      await db.update(pendingPayments).set({ status: "failed" }).where(eq(pendingPayments.id, payment.id));
-      // Full detail goes to your Worker logs (`wrangler tail`) even if the
-      // frontend only sees a shortened version.
-      console.warn(
-        `Korapay initialize failed for user=${user.id} amount=${amountNgn} reference=${reference}:`,
-        e
-      );
-      const message = e instanceof KorapayError ? e.message : String((e as Error)?.message ?? e);
-      throw new HTTPException(502, { message: `Payment provider error: ${message}` });
-    }
+    return row;
   });
+
+  // External Korapay call happens with no DB connection open.
+  try {
+    const charge = await initializeCharge(settings, {
+      amountNgn,
+      customerEmail: user.email,
+      reference,
+      redirectUrl: settings.korapayRedirectUrl,
+    });
+    return c.json({ reference, checkout_url: charge.checkout_url });
+  } catch (e) {
+    await withDb(c, async (db) => {
+      await db.update(pendingPayments).set({ status: "failed" }).where(eq(pendingPayments.id, payment.id));
+    });
+    // Full detail goes to your Worker logs (`wrangler tail`) even if the
+    // frontend only sees a shortened version.
+    console.warn(
+      `Korapay initialize failed for user=${user.id} amount=${amountNgn} reference=${reference}:`,
+      e
+    );
+    const message = e instanceof KorapayError ? e.message : String((e as Error)?.message ?? e);
+    throw new HTTPException(502, { message: `Payment provider error: ${message}` });
+  }
 });
 
 paymentRoutes.post("/webhook", async (c) => {
@@ -78,39 +82,51 @@ paymentRoutes.post("/webhook", async (c) => {
   const reference = payload?.data?.reference;
   if (!reference) throw new HTTPException(400, { message: "Missing reference" });
 
-  return withDb(c, async (db) => {
-    const payment = await db.query.pendingPayments.findFirst({ where: eq(pendingPayments.reference, reference) });
+  // This is the route that actually credits a user's wallet, and it used
+  // to hold a DB connection open across verifyTransaction — a full
+  // network round-trip to Korapay. Under the same connection-pool
+  // pressure causing the /offers timeouts, that meant this webhook could
+  // itself fail to get a DB slot, i.e. a real deposit could silently
+  // never get credited. Fixed the same way as the SMS provider routes:
+  // short DB read, external verification call with no DB connection
+  // open, then a short DB write for the actual credit.
+  const payment = await withDb(c, async (db) => {
+    return db.query.pendingPayments.findFirst({ where: eq(pendingPayments.reference, reference) });
+  });
 
-    if (!payment) {
-      // Unrecognized reference — ignore rather than error. Some gateways
-      // retry aggressively; we don't want to leak info via error codes.
-      return c.json({ status: "ignored" });
-    }
+  if (!payment) {
+    // Unrecognized reference — ignore rather than error. Some gateways
+    // retry aggressively; we don't want to leak info via error codes.
+    return c.json({ status: "ignored" });
+  }
 
-    if (payment.status === "success") {
-      // Already credited — webhooks can and will arrive more than once.
-      return c.json({ status: "already_processed" });
-    }
+  if (payment.status === "success") {
+    // Already credited — webhooks can and will arrive more than once.
+    return c.json({ status: "already_processed" });
+  }
 
-    // Never trust payload.status directly. Re-verify server-side against Korapay.
-    let verified: any;
-    try {
-      verified = await verifyTransaction(settings, reference);
-    } catch {
-      throw new HTTPException(502, { message: "Could not verify with provider" });
-    }
+  // Never trust payload.status directly. Re-verify server-side against Korapay.
+  let verified: any;
+  try {
+    verified = await verifyTransaction(settings, reference);
+  } catch {
+    throw new HTTPException(502, { message: "Could not verify with provider" });
+  }
 
-    if (verified.status !== "success") {
+  if (verified.status !== "success") {
+    return withDb(c, async (db) => {
       await db.update(pendingPayments).set({ status: "failed" }).where(eq(pendingPayments.id, payment.id));
       return c.json({ status: "not_successful" });
-    }
+    });
+  }
 
-    const verifiedAmount = Number(verified.amount ?? 0);
-    if (verifiedAmount < payment.amountNgn) {
-      // Paid less than expected — do not credit the originally requested amount.
-      throw new HTTPException(400, { message: "Amount mismatch" });
-    }
+  const verifiedAmount = Number(verified.amount ?? 0);
+  if (verifiedAmount < payment.amountNgn) {
+    // Paid less than expected — do not credit the originally requested amount.
+    throw new HTTPException(400, { message: "Amount mismatch" });
+  }
 
+  return withDb(c, async (db) => {
     const [wallet] = await db.select().from(wallets).where(eq(wallets.userId, payment.userId));
     if (!wallet) throw new HTTPException(500, { message: "Wallet not found" });
 
