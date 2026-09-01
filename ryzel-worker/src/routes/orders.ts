@@ -3,7 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { eq, desc } from "drizzle-orm";
 import type { Env } from "../types";
 import type { CurrentUser } from "../middleware/auth";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, invalidateAuthCache } from "../middleware/auth";
 import { rateLimit } from "../middleware/rateLimit";
 import { withDb, type Db } from "../db/client";
 import { orders, wallets, ledgerEntries } from "../db/schema";
@@ -55,26 +55,33 @@ orderRoutes.get("/price", rateLimit("RATE_LIMIT_ORDERS_PRICE"), async (c) => {
   if (!service) throw new HTTPException(400, { message: "Service is required" });
   if (!country) throw new HTTPException(400, { message: "Country is required" });
 
+  // Provider lookup happens BEFORE opening a DB connection — this used to
+  // sit inside withDb, holding a Postgres connection open for the entire
+  // external network round-trip to the SMS provider. Under real traffic
+  // that's enough to exhaust Hyperdrive's connection pool, which is what
+  // caused the recurring "Timed out while waiting for an open slot"
+  // errors (and, very likely, the missed deposit — the payment webhook
+  // couldn't get a connection either while this was happening).
+  let costUsd: number | null = null;
+  let lastError: unknown = null;
+  for (const provider of getFallbackChain(settings)) {
+    try {
+      costUsd = await provider.getPriceUsd(service, country);
+      break;
+    } catch (e) {
+      lastError = e;
+      continue;
+    }
+  }
+
+  if (costUsd === null) {
+    if (lastError instanceof ProviderLookupError) {
+      throw new HTTPException(404, { message: lastError.message });
+    }
+    throw new HTTPException(502, { message: `Provider error: ${String((lastError as Error)?.message ?? lastError)}` });
+  }
+
   return withDb(c, async (db) => {
-    let costUsd: number | null = null;
-    let lastError: unknown = null;
-    for (const provider of getFallbackChain(settings)) {
-      try {
-        costUsd = await provider.getPriceUsd(service, country);
-        break;
-      } catch (e) {
-        lastError = e;
-        continue;
-      }
-    }
-
-    if (costUsd === null) {
-      if (lastError instanceof ProviderLookupError) {
-        throw new HTTPException(404, { message: lastError.message });
-      }
-      throw new HTTPException(502, { message: `Provider error: ${String((lastError as Error)?.message ?? lastError)}` });
-    }
-
     return c.json({
       service,
       country,
@@ -94,29 +101,32 @@ orderRoutes.post("/", rateLimit("RATE_LIMIT_ORDERS_BUY"), async (c) => {
   if (!service) throw new HTTPException(400, { message: "Service is required" });
   if (!country) throw new HTTPException(400, { message: "Country is required" });
 
+  // Reservation happens BEFORE opening a DB connection — same reasoning
+  // as /price above. This can take a while (network round-trip to the
+  // provider), and previously held a DB connection open the whole time.
+  let provider = null;
+  let reserved = null;
+  let lastError: unknown = null;
+
+  for (const candidate of getFallbackChain(settings)) {
+    try {
+      reserved = await candidate.reserveNumber(service, country, normalizedOperator);
+      provider = candidate;
+      break;
+    } catch (e) {
+      lastError = e;
+      continue;
+    }
+  }
+
+  if (!reserved || !provider) {
+    if (lastError instanceof ProviderLookupError) {
+      throw new HTTPException(400, { message: lastError.message });
+    }
+    throw new HTTPException(502, { message: `Provider error: ${String((lastError as Error)?.message ?? lastError)}` });
+  }
+
   return withDb(c, async (db) => {
-    let provider = null;
-    let reserved = null;
-    let lastError: unknown = null;
-
-    for (const candidate of getFallbackChain(settings)) {
-      try {
-        reserved = await candidate.reserveNumber(service, country, normalizedOperator);
-        provider = candidate;
-        break;
-      } catch (e) {
-        lastError = e;
-        continue;
-      }
-    }
-
-    if (!reserved || !provider) {
-      if (lastError instanceof ProviderLookupError) {
-        throw new HTTPException(400, { message: lastError.message });
-      }
-      throw new HTTPException(502, { message: `Provider error: ${String((lastError as Error)?.message ?? lastError)}` });
-    }
-
     const priceNgn = await priceForCustomer(reserved.costUsd, db, settings);
 
     const [wallet] = await db.select().from(wallets).where(eq(wallets.userId, user.id));
@@ -158,6 +168,8 @@ orderRoutes.post("/", rateLimit("RATE_LIMIT_ORDERS_BUY"), async (c) => {
       orderId: order.id,
       balanceAfterNgn: newBalance,
     });
+
+    invalidateAuthCache(user.id);
 
     return c.json(serializeOrder(order));
   });
@@ -271,6 +283,8 @@ async function refund(
     orderId: order.id,
     balanceAfterNgn: newBalance,
   });
+
+  invalidateAuthCache(userId);
 
   return updatedOrder;
 }

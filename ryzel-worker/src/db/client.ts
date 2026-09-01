@@ -24,9 +24,19 @@ import type { Env } from "../types";
  * is what actually pools/reuses the real connection to Postgres on
  * Cloudflare's side, so the driver here doesn't need to pool anything
  * itself; it just needs one connection per request.
+ *
+ * `prepare: false` is equally required, not optional — this was missing
+ * before and is very likely why errors persisted even after switching
+ * off `pg`. Hyperdrive (and the pooler underneath it, e.g. Supabase's
+ * pgbouncer in transaction-pooling mode) does not support prepared
+ * statements the way a direct, dedicated Postgres connection does.
+ * `postgres.js` prepares statements by default; without this flag,
+ * queries can intermittently fail or hang depending on which pooled
+ * connection a request happens to land on. This is Cloudflare's own
+ * documented requirement for postgres.js + Hyperdrive.
  */
 export async function createDb(env: Env) {
-  const client = postgres(env.HYPERDRIVE.connectionString, { max: 1 });
+  const client = postgres(env.HYPERDRIVE.connectionString, { max: 1, prepare: false });
   return { db: drizzle(client, { schema }), client };
 }
 

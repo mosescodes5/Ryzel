@@ -21,6 +21,44 @@ export interface CurrentUser {
 // instance per Supabase project URL, reused across requests/isolates.
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
+interface CachedAuthResult {
+  isAdmin: boolean;
+  isSuspended: boolean;
+  walletBalanceNgn: number;
+  expiresAt: number;
+}
+
+/**
+ * De-duplicates the wallet lookup across near-simultaneous requests for
+ * the SAME user — the frontend fires /auth/me, /wallet/balance, and other
+ * protected routes together on every page load, and each one previously
+ * re-ran this exact DB query independently, opening its own connection
+ * for identical data fetched milliseconds apart. That's wasteful under
+ * Hyperdrive's hard 20-connection ceiling (not raisable on this plan).
+ *
+ * TTL is deliberately very short (1.5s) — long enough to catch a single
+ * page load's burst of parallel requests, short enough that a real
+ * balance change (top-up, purchase) is never stale for more than a
+ * moment. This only helps when concurrent requests land on the same
+ * Workers isolate (common for one user's own parallel requests from one
+ * location) — it degrades gracefully to a normal DB hit otherwise, so it
+ * can't make things worse, only better in the common case.
+ */
+const authResultCache = new Map<string, CachedAuthResult>();
+const AUTH_CACHE_TTL_MS = 1500;
+
+/**
+ * Call this immediately after any code path that changes a user's wallet
+ * balance, admin status, or suspension status (the Korapay webhook, admin
+ * wallet adjustments, etc.) — without this, a request landing within the
+ * 1.5s cache window right after such a change could still see the old
+ * value, which is exactly the "balance didn't update" symptom we're
+ * trying to eliminate, not reintroduce.
+ */
+export function invalidateAuthCache(userId: string) {
+  authResultCache.delete(userId);
+}
+
 function getJwks(supabaseUrl: string) {
   let jwks = jwksCache.get(supabaseUrl);
   if (!jwks) {
@@ -91,11 +129,21 @@ export async function requireAuth(c: Context<{ Bindings: Env; Variables: { user:
 
   const settings = getSettings(c.env);
 
-  const { isAdmin, isSuspended, walletBalanceNgn } = await withDb(c, async (db) => {
-    const wallet = await getOrCreateWallet(db, sub, email);
-    const isAdmin = wallet.isAdmin || settings.adminEmails.has(email.toLowerCase());
-    return { isAdmin, isSuspended: wallet.isSuspended, walletBalanceNgn: wallet.walletBalanceNgn };
-  });
+  let isAdmin: boolean;
+  let isSuspended: boolean;
+  let walletBalanceNgn: number;
+
+  const cached = authResultCache.get(sub);
+  if (cached && cached.expiresAt > Date.now()) {
+    ({ isAdmin, isSuspended, walletBalanceNgn } = cached);
+  } else {
+    ({ isAdmin, isSuspended, walletBalanceNgn } = await withDb(c, async (db) => {
+      const wallet = await getOrCreateWallet(db, sub, email);
+      const isAdminResult = wallet.isAdmin || settings.adminEmails.has(email.toLowerCase());
+      return { isAdmin: isAdminResult, isSuspended: wallet.isSuspended, walletBalanceNgn: wallet.walletBalanceNgn };
+    }));
+    authResultCache.set(sub, { isAdmin, isSuspended, walletBalanceNgn, expiresAt: Date.now() + AUTH_CACHE_TTL_MS });
+  }
 
   if (isSuspended) {
     throw new HTTPException(403, { message: "This account has been suspended. Contact support." });

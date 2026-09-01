@@ -3,7 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { desc, eq } from "drizzle-orm";
 import type { Env } from "../types";
 import type { CurrentUser } from "../middleware/auth";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, invalidateAuthCache } from "../middleware/auth";
 import { withDb } from "../db/client";
 import { wallets, ledgerEntries } from "../db/schema";
 import { getSettings } from "../lib/config";
@@ -70,6 +70,8 @@ walletRoutes.post("/topup/dev-only", async (c) => {
       reason: "topup_dev",
       balanceAfterNgn: newBalance,
     });
+
+    invalidateAuthCache(user.id);
 
     return c.json({ wallet_balance_ngn: newBalance });
   });

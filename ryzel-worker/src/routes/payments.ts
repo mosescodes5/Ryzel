@@ -3,6 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import type { Env } from "../types";
 import type { CurrentUser } from "../middleware/auth";
 import { requireAuth } from "../middleware/auth";
+import { invalidateAuthCache } from "../middleware/auth";
 import { rateLimit } from "../middleware/rateLimit";
 import { withDb } from "../db/client";
 import { pendingPayments, wallets, ledgerEntries } from "../db/schema";
@@ -126,6 +127,12 @@ paymentRoutes.post("/webhook", async (c) => {
       reason: "topup_korapay",
       balanceAfterNgn: newBalance,
     });
+
+    // Without this, a request landing within the auth cache's 1.5s window
+    // right after this webhook fires could still show the pre-credit
+    // balance — exactly the "deposit didn't reflect" symptom we're
+    // fixing, not something we want to reintroduce via caching.
+    invalidateAuthCache(payment.userId);
 
     if (wallet.email) {
       const { subject, html } = topupReceiptEmail(settings, payment.amountNgn, newBalance);

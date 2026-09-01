@@ -3,13 +3,13 @@ import { HTTPException } from "hono/http-exception";
 import { desc, eq, ilike, inArray, sql, count, sum } from "drizzle-orm";
 import type { Env } from "../types";
 import type { CurrentUser } from "../middleware/auth";
-import { requireAuth, requireAdmin } from "../middleware/auth";
+import { requireAuth, requireAdmin, invalidateAuthCache } from "../middleware/auth";
 import { withDb } from "../db/client";
 import { wallets, orders, ledgerEntries, siteSettings } from "../db/schema";
 import { getSettings } from "../lib/config";
 import { getPricingConfig, savePricingConfig } from "../lib/pricing";
 import { getFeesConfig, saveFeesConfig } from "../lib/fees";
-import { getSiteSettings, SITE_SETTINGS_DEFAULTS } from "./settings";
+import { getSiteSettings, SITE_SETTINGS_DEFAULTS, purgeSiteSettingsCache } from "./settings";
 
 type Vars = { user: CurrentUser };
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -62,6 +62,8 @@ adminRoutes.put("/settings", async (c) => {
         .values({ key, value })
         .onConflictDoUpdate({ target: siteSettings.key, set: { value, updatedAt: new Date() } });
     }
+
+    await purgeSiteSettingsCache();
 
     return c.json(await getSiteSettings(db));
   });
@@ -191,6 +193,8 @@ adminRoutes.post("/users/:userId/adjust-wallet", async (c) => {
       balanceAfterNgn: newBalance,
     });
 
+    invalidateAuthCache(userId);
+
     return c.json(serializeUser(updated));
   });
 });
@@ -201,6 +205,7 @@ adminRoutes.post("/users/:userId/suspend", async (c) => {
   return withDb(c, async (db) => {
     const [updated] = await db.update(wallets).set({ isSuspended: true }).where(eq(wallets.userId, userId)).returning();
     if (!updated) throw new HTTPException(404, { message: "User not found" });
+    invalidateAuthCache(userId);
     return c.json(serializeUser(updated));
   });
 });
@@ -215,6 +220,7 @@ adminRoutes.post("/users/:userId/unsuspend", async (c) => {
       .where(eq(wallets.userId, userId))
       .returning();
     if (!updated) throw new HTTPException(404, { message: "User not found" });
+    invalidateAuthCache(userId);
     return c.json(serializeUser(updated));
   });
 });
@@ -236,6 +242,8 @@ adminRoutes.post("/users/:userId/toggle-admin", async (c) => {
       .set({ isAdmin: !wallet.isAdmin })
       .where(eq(wallets.userId, userId))
       .returning();
+
+    invalidateAuthCache(userId);
 
     return c.json(serializeUser(updated));
   });

@@ -3,7 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { and, eq, desc, count } from "drizzle-orm";
 import type { Env } from "../types";
 import type { CurrentUser } from "../middleware/auth";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, invalidateAuthCache } from "../middleware/auth";
 import { withDb, type Db } from "../db/client";
 import { invoices, wallets, ledgerEntries } from "../db/schema";
 import { getSettings } from "../lib/config";
@@ -163,6 +163,8 @@ invoiceRoutes.post("/", async (c) => {
 
       return inv;
     });
+
+    invalidateAuthCache(user.id);
 
     return c.json(serializeInvoice(created));
   });

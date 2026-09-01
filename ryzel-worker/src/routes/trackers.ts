@@ -3,7 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { eq, desc } from "drizzle-orm";
 import type { Env } from "../types";
 import type { CurrentUser } from "../middleware/auth";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, invalidateAuthCache } from "../middleware/auth";
 import { withDb, type Db } from "../db/client";
 import { shipments, wallets, ledgerEntries } from "../db/schema";
 import { getSettings } from "../lib/config";
@@ -162,6 +162,8 @@ trackerRoutes.post("/", async (c) => {
       reason: "tracker_fee",
       balanceAfterNgn: newBalance,
     });
+
+    invalidateAuthCache(user.id);
 
     return c.json(serializeShipment(created));
   });
