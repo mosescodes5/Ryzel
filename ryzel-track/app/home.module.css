@@ -1,0 +1,88 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: linear-gradient(180deg, #f5f6f8 0%, #eef0f4 100%);
+}
+
+.hero {
+  width: 100%;
+  max-width: 520px;
+  text-align: center;
+  animation: fadeUp 0.5s ease both;
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.title {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 10px;
+}
+
+.subtitle {
+  font-size: 15px;
+  color: #6b7280;
+  margin-bottom: 32px;
+}
+
+.form {
+  display: flex;
+  gap: 10px;
+  background: #ffffff;
+  padding: 8px;
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.06);
+}
+
+.input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 15px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: transparent;
+}
+
+.input::placeholder {
+  color: #9ca3af;
+}
+
+.button {
+  border: none;
+  background: #1a1d29;
+  color: white;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 12px 24px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.button:hover {
+  background: #333649;
+}
+
+.button:active {
+  transform: scale(0.97);
+}
+
+.error {
+  margin-top: 14px;
+  font-size: 13px;
+  color: #dc2626;
+}
