@@ -25,6 +25,11 @@ interface PublicShipment {
   updated_at: string;
 }
 
+// Includes both the old ryzel-worker vocabulary (label_created, picked_up,
+// returned) and ryzel-buy-number's PACKAGE_STATUSES vocabulary (pending,
+// received, delayed, cancelled) — the API now serves the latter, but any
+// status not listed here still falls back to formatStatus()'s generic
+// title-casing below, so nothing breaks if either vocabulary changes.
 const STATUS_LABELS: Record<string, string> = {
   label_created: "Label Created",
   picked_up: "Picked Up",
@@ -33,6 +38,10 @@ const STATUS_LABELS: Record<string, string> = {
   delivered: "Delivered",
   exception: "Exception",
   returned: "Returned to Sender",
+  pending: "Pending",
+  received: "Received at Facility",
+  delayed: "Delayed",
+  cancelled: "Cancelled",
 };
 
 function formatStatus(status: string): string {

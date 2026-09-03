@@ -1,10 +1,13 @@
 import styles from "./tracking.module.css";
 import TrackingTimeline from "./TrackingTimeline";
 
-// TODO: confirm this matches how `publicTrackerRoutes` is actually mounted
-// in ryzel-worker's index.ts (e.g. app.route("/track", publicTrackerRoutes)
-// vs "/public/trackers" etc.) — update this one constant if it differs.
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "https://api.ryzel.online";
+// Points at the ryzel-buy-number monolith's public tracking API. That app
+// owns the actual `packages` table now (created via its own dashboard's
+// self-service Package Tracker, or by an admin) — this used to point at
+// api.ryzel.online (the old ryzel-worker backend), which read from a
+// separate, now-disconnected database that ryzel-buy-number's tracking
+// numbers were never written to.
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "https://ryzel.online/api/v1";
 const PUBLIC_TRACKER_PATH = "/track";
 
 async function getShipment(code: string) {
