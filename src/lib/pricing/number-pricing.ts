@@ -20,7 +20,7 @@ const DEFAULT_RULE: PricingRule = {
   minPriceCents: 50
 };
 
-async function fetchGlobalPricing(client: ReturnType<typeof createClient>): Promise<PricingRule> {
+async function fetchGlobalPricing(client: Awaited<ReturnType<typeof createClient>>): Promise<PricingRule> {
   const { data, error } = await client.from('number_pricing').select('*').eq('id', true).single();
   if (error || !data) {
     // Sensible fallback so a missing row never blocks a sale — 40% markup, 50c floor.
@@ -35,7 +35,7 @@ async function fetchGlobalPricing(client: ReturnType<typeof createClient>): Prom
 }
 
 async function fetchServiceOverride(
-  client: ReturnType<typeof createClient>,
+  client: Awaited<ReturnType<typeof createClient>>,
   product: string
 ): Promise<PricingRule | null> {
   const { data, error } = await client
@@ -56,7 +56,7 @@ async function fetchServiceOverride(
 }
 
 async function fetchPricing(
-  client: ReturnType<typeof createClient>,
+  client: Awaited<ReturnType<typeof createClient>>,
   product?: string
 ): Promise<PricingRule> {
   if (product) {
@@ -72,7 +72,7 @@ async function fetchPricing(
  * per-service override if one exists; falls back to the global markup.
  */
 export async function getPricingRule(product?: string): Promise<PricingRule> {
-  return fetchPricing(createClient(), product);
+  return fetchPricing(await createClient(), product);
 }
 
 /** Server-only read (service role) — used inside purchase flows where there's no user session yet. */

@@ -318,7 +318,7 @@ export async function cancelActivationOrder({ userId, orderId }: { userId: strin
 }
 
 export async function listActivationOrdersForUser(userId: string) {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('number_orders')
     .select('*')

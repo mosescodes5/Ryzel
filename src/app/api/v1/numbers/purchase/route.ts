@@ -8,7 +8,7 @@ import { purchaseNumberSchema, parseOrError } from '@/lib/validation/schemas';
 export const runtime = 'edge';
 
 export async function POST(request: Request) {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user }
   } = await supabase.auth.getUser();

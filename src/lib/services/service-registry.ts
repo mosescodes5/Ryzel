@@ -20,7 +20,7 @@ export type ServiceRecord = {
  * no core app changes needed to launch or retire a product.
  */
 export async function listServices(opts?: { activeOnly?: boolean }): Promise<ServiceRecord[]> {
-  const supabase = createClient();
+  const supabase = await createClient();
   let query = supabase.from('services').select('*').order('category');
 
   if (opts?.activeOnly) {
@@ -33,7 +33,7 @@ export async function listServices(opts?: { activeOnly?: boolean }): Promise<Ser
 }
 
 export async function getServiceBySlug(slug: string): Promise<ServiceRecord | null> {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data, error } = await supabase.from('services').select('*').eq('slug', slug).maybeSingle();
   if (error) throw error;
   return data;

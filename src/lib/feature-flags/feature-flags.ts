@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/server';
  * (code merged, UI hidden) until they're ready for public traffic.
  */
 export async function isFeatureEnabled(key: string): Promise<boolean> {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('feature_flags')
     .select('enabled')
@@ -17,7 +17,7 @@ export async function isFeatureEnabled(key: string): Promise<boolean> {
 }
 
 export async function getAllFlags(): Promise<Record<string, boolean>> {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data, error } = await supabase.from('feature_flags').select('key, enabled');
   if (error || !data) return {};
   return Object.fromEntries(data.map((f) => [f.key, f.enabled]));

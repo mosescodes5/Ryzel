@@ -6,7 +6,7 @@ import { listActivationOrdersForUser } from '@/modules/numbers/services/activati
 export const runtime = 'edge';
 
 export async function GET() {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user }
   } = await supabase.auth.getUser();

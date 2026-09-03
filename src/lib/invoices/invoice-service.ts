@@ -19,7 +19,7 @@ export function calculateSubtotalCents(items: InvoiceItem[]): number {
 
 /** Next invoice number for this user, e.g. "INV-0007" — sequential per user, not globally. */
 async function nextInvoiceNumber(userId: string): Promise<string> {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { count } = await supabase
     .from('invoices')
     .select('*', { count: 'exact', head: true })
@@ -38,7 +38,7 @@ export async function createInvoice(input: {
   notes?: string;
   dueDate?: string;
 }): Promise<InvoiceRecord> {
-  const supabase = createClient();
+  const supabase = await createClient();
 
   // Retry on the rare case two invoices are created in the same instant and
   // both compute the same "next" number — the (user_id, invoice_number)
@@ -72,7 +72,7 @@ export async function createInvoice(input: {
 }
 
 export async function listInvoices(userId: string): Promise<InvoiceRecord[]> {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('invoices')
     .select('*')
@@ -84,13 +84,13 @@ export async function listInvoices(userId: string): Promise<InvoiceRecord[]> {
 }
 
 export async function getInvoiceById(id: string, userId: string): Promise<InvoiceRecord | null> {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data } = await supabase.from('invoices').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
   return data;
 }
 
 export async function updateInvoiceStatus(id: string, userId: string, status: InvoiceStatus): Promise<void> {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { error } = await supabase
     .from('invoices')
     .update({ status, updated_at: new Date().toISOString() })

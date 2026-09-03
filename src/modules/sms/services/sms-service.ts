@@ -19,7 +19,7 @@ export async function recordInboundSms(msg: IncomingSms) {
 }
 
 export async function listMessagesForOrder(numberOrderId: string) {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('sms_messages')
     .select('*')

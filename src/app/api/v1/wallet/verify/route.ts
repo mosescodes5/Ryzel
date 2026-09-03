@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'reference is required' }, { status: 400 });
   }
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user }
   } = await supabase.auth.getUser();

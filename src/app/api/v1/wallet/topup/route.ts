@@ -10,7 +10,7 @@ export const runtime = 'edge';
 const MIN_TOPUP_CENTS = 100; // smallest allowed top-up, in minor units
 
 export async function POST(request: Request) {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user }
   } = await supabase.auth.getUser();

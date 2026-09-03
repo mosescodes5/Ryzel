@@ -8,7 +8,7 @@ import { listActivationOrdersForUser } from '@/modules/numbers/services/activati
 import { BuyNumberPanel } from '@/modules/numbers/components/buy-number-panel';
 
 export default async function DashboardOverviewPage() {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user }
   } = await supabase.auth.getUser();

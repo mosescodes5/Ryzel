@@ -4,7 +4,7 @@ import { getCurrentUserWithRole } from '@/lib/permissions/permissions';
 import { Sidebar } from '@/components/dashboard/sidebar';
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { user, role } = await getCurrentUserWithRole();
 
   if (!user) redirect('/login');

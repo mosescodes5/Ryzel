@@ -33,7 +33,8 @@ export async function OPTIONS(request: Request) {
   return new NextResponse(null, { status: 204, headers: corsHeaders(request.headers.get('origin')) });
 }
 
-export async function GET(request: Request, { params }: { params: { code: string } }) {
+export async function GET(request: Request, props: { params: Promise<{ code: string }> }) {
+  const params = await props.params;
   const headers = corsHeaders(request.headers.get('origin'));
 
   const result = await getPackageByTrackingNumber(decodeURIComponent(params.code));

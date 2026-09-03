@@ -27,13 +27,13 @@ function statusColor(status: string) {
 export default async function DashboardAdminPackagesPage({
   searchParams
 }: {
-  searchParams: { q?: string };
+  searchParams: Promise<{ q?: string }>;
 }) {
   const { user, role } = await getCurrentUserWithRole();
   if (!user) redirect('/login');
   if (role !== 'admin') redirect('/dashboard');
-
-  const packages = await listPackages(searchParams.q);
+  const resolvedSearchParams = await searchParams;
+  const packages = await listPackages(resolvedSearchParams.q);
 
   return (
     <div className="flex flex-col gap-6">
@@ -50,7 +50,7 @@ export default async function DashboardAdminPackagesPage({
               <input
                 type="text"
                 name="q"
-                defaultValue={searchParams.q ?? ''}
+                defaultValue={resolvedSearchParams.q ?? ''}
                 placeholder="Search by tracking number, customer name, or email"
                 className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-800 outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500"
               />

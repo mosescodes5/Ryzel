@@ -8,7 +8,7 @@ export async function searchAvailableNumbers(params: { countryCode: string; area
 }
 
 export async function listInventoryFromDb() {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('number_inventory')
     .select('*')
@@ -78,7 +78,7 @@ export async function purchaseNumber({ userId, numberInventoryId }: { userId: st
 }
 
 export async function listOrdersForUser(userId: string) {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('number_orders')
     .select('*, number_inventory(phone_number, country_code)')

@@ -5,7 +5,7 @@ import { DCard, DButton, PageHeader } from '@/components/dashboard/ui';
 import { updateNotifyPhone } from './actions';
 
 export default async function AccountPage() {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user }
   } = await supabase.auth.getUser();

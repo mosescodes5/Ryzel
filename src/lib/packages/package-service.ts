@@ -209,7 +209,7 @@ export function publicTrackingUrl(trackingNumber: string): string {
 export async function getPackageByTrackingNumber(
   trackingNumber: string
 ): Promise<{ pkg: PackageRecord; events: PackageEvent[] } | null> {
-  const supabase = createClient();
+  const supabase = await createClient();
   const normalized = trackingNumber.trim().toUpperCase();
 
   const { data: pkg } = await supabase.from('packages').select('*').eq('tracking_number', normalized).maybeSingle();

@@ -21,7 +21,8 @@ function statusColor(status: string) {
   }
 }
 
-export default async function TrackResultPage({ params }: { params: { trackingNumber: string } }) {
+export default async function TrackResultPage(props: { params: Promise<{ trackingNumber: string }> }) {
+  const params = await props.params;
   const result = await getPackageByTrackingNumber(decodeURIComponent(params.trackingNumber));
 
   return (

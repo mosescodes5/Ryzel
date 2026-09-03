@@ -13,28 +13,23 @@ const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? process.e
 /**
  * Server-side Supabase client (RLS-scoped to the requesting user).
  * Use in server components, route handlers, and server actions.
+ * Must be awaited — cookies() is async as of Next.js 15.
  */
-export function createClient() {
-  const cookieStore = cookies();
-
+export async function createClient() {
+  const cookieStore = await cookies();
   return createServerClient<Database>(SUPABASE_URL!, SUPABASE_ANON_KEY!, {
     cookies: {
-      get(name: string) {
-        return cookieStore.get(name)?.value;
+      getAll() {
+        return cookieStore.getAll();
       },
-      set(name: string, value: string, options) {
+      setAll(cookiesToSet) {
         try {
-          cookieStore.set({ name, value, ...options });
+          cookiesToSet.forEach(({ name, value, options }) => {
+            cookieStore.set(name, value, options);
+          });
         } catch {
           // Called from a Server Component with no writable cookie jar — safe to ignore
           // when middleware is refreshing the session.
-        }
-      },
-      remove(name: string, options) {
-        try {
-          cookieStore.set({ name, value: '', ...options });
-        } catch {
-          // See note above.
         }
       }
     }

@@ -11,7 +11,8 @@ function formatMoney(cents: number, currency: string) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(cents / 100);
 }
 
-export default async function InvoiceDetailPage({ params }: { params: { id: string } }) {
+export default async function InvoiceDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const { user } = await getCurrentUserWithRole();
   if (!user) redirect('/login');
 

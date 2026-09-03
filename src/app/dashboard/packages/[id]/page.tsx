@@ -10,7 +10,8 @@ function statusLabel(status: string) {
   return PACKAGE_STATUSES.find((s) => s.value === status)?.label ?? status;
 }
 
-export default async function DashboardPackageDetailPage({ params }: { params: { id: string } }) {
+export default async function DashboardPackageDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const { user } = await getCurrentUserWithRole();
   if (!user) redirect('/login');
 

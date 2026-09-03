@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/server';
 import { notifyPhoneSchema, parseOrError } from '@/lib/validation/schemas';
 
 export async function updateNotifyPhone(formData: FormData) {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user }
   } = await supabase.auth.getUser();

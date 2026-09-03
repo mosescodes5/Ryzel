@@ -11,7 +11,7 @@ const REASON_LABEL: Record<string, string> = {
 };
 
 export default async function TransactionsPage() {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user }
   } = await supabase.auth.getUser();

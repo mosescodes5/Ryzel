@@ -7,7 +7,7 @@ const ADMIN_EMAILS = (process.env.ADMIN_EMAILS ?? '')
   .filter(Boolean);
 
 export async function getCurrentUserWithRole(): Promise<{ user: User | null; role: 'user' | 'admin' | null }> {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user }
   } = await supabase.auth.getUser();
