@@ -16,9 +16,11 @@ const KORAPAY_BASE_URL = 'https://api.korapay.com/merchant/api/v1';
  * handler calls verifyCharge() before crediting the wallet — never trust
  * the redirect alone, since it's client-controlled.
  *
- * Amounts: this app stores balances/prices in minor units ("cents") for
- * currency-agnostic math. Korapay's API expects amounts in the currency's
- * base unit (e.g. naira, not kobo), so this provider converts at the edge.
+ * Amounts: despite the `amountCents` field name (kept as-is across the
+ * codebase to avoid a schema rename), this value is now plain naira, not
+ * kobo — no ×100/÷100 conversion happens anywhere in this app anymore.
+ * Korapay's own API also expects naira directly, so this provider passes
+ * the value straight through with no scaling in either direction.
  */
 export class KorapayProvider implements PaymentProvider {
   readonly name = 'korapay';
@@ -38,7 +40,7 @@ export class KorapayProvider implements PaymentProvider {
       },
       body: JSON.stringify({
         reference: params.reference,
-        amount: params.amountCents / 100,
+        amount: params.amountCents,
         currency: params.currency,
         redirect_url: params.redirectUrl,
         customer: {
@@ -77,7 +79,8 @@ export class KorapayProvider implements PaymentProvider {
 
     return {
       status,
-      amountCents: Math.round(Number(body.data.amount) * 100),
+      // Rounded to 2dp to avoid floating point drift (e.g. 99.990000001).
+      amountCents: Math.round(Number(body.data.amount) * 100) / 100,
       currency: body.data.currency,
       providerReference: body.data.reference
     };
@@ -93,10 +96,6 @@ export class KorapayProvider implements PaymentProvider {
       return Promise.resolve(false);
     }
 
-    // Korapay signs only the `data` object of the payload, not the whole body.
-    // Uses the standard Web Crypto API (crypto.subtle) rather than Node's
-    // `crypto` module so this runs unmodified on Cloudflare Workers, Vercel
-    // Edge, or a plain Node server — no runtime-specific polyfills needed.
     return hmacSha256Hex(this.secretKey, JSON.stringify(payload.data ?? {})).then((expected) =>
       timingSafeEqualHex(expected, signatureHeader)
     );
@@ -117,7 +116,6 @@ async function hmacSha256Hex(secret: string, message: string): Promise<string> {
     .join('');
 }
 
-/** Constant-time string comparison — avoids leaking the expected signature via timing. */
 function timingSafeEqualHex(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let mismatch = 0;

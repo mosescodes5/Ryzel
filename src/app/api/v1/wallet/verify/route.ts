@@ -4,7 +4,6 @@ import { getPaymentProvider } from '@/lib/payments/providers/provider-manager';
 import { creditWallet } from '@/lib/payments/wallet';
 
 // Runs on Cloudflare's Workers runtime via @cloudflare/next-on-pages.
-export const runtime = 'edge';
 
 /**
  * Called from the wallet page right after Korapay redirects the customer

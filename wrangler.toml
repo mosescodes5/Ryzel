@@ -1,13 +1,36 @@
+#:schema node_modules/wrangler/config-schema.json
 name = "ryzel"
-compatibility_date = "2024-09-23"
+main = ".open-next/worker.js"
+compatibility_date = "2026-09-04"
 compatibility_flags = ["nodejs_compat"]
-pages_build_output_dir = ".vercel/output/static"
 
-# Environment variables and secrets are NOT set here for anything sensitive.
-# Set public build-time vars below if needed, and set secrets (Supabase
-# service role key, Korapay secret key, etc.) via:
-#   npx wrangler pages secret put SUPABASE_SERVICE_ROLE_KEY
-# or in the Cloudflare dashboard under Pages > your project > Settings > Environment variables.
-#
-# [vars]
-# NEXT_PUBLIC_APP_URL = "https://your-domain.com"
+# Use the new Workers + Assets to host the static frontend files
+assets = { directory = ".open-next/assets", binding = "ASSETS" }
+
+observability = { enabled = true }
+
+[vars]
+NEXT_PUBLIC_SUPABASE_URL = "https://iuheykqammmxrtpamkpg.supabase.co"
+NEXT_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml1aGV5a3FhbW1teHJ0cGFta3BnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYxNTA1NjYsImV4cCI6MjEwMTcyNjU2Nn0.iX6MGBBZX3LUQouQ8DlZPUclS-pLSQhcO3y5SZpUMcY"
+NEXT_PUBLIC_APP_URL = "https://ryzel.online/"
+ADMIN_EMAILS = "mosesoluwa2005@gmail.com"
+CORS_ORIGINS = "https://ryzel.online,https://www.ryzel.online,https://track.ryzel.online/,http://localhost:3000"
+NUMBERS_PROVIDER = "mock"
+PROVIDER = "fivesim"
+PROVIDER_BASE_URL = "https://5sim.net/v1"
+PROVIDER_FALLBACK = ""
+ORDER_TIMEOUT_SECONDS = "600"
+USD_NGN_RATE = "1600"
+FIVESIM_RATE_TO_WALLET_MINOR_UNITS = "100"
+BREVO_SENDER_NAME = "Ryzel"
+BREVO_SENDER_EMAIL = "rply.smsone@gmail.com"
+PAYMENTS_PROVIDER = "korapay"
+KORAPAY_PUBLIC_KEY = "pk_live_WpnK71PjjkymByAzC3Sg1YxqqJeiERjSwLzHDanY"
+KORAPAY_DEFAULT_CURRENCY = "NGN"
+KORAPAY_REDIRECT_URL = "https://ryzel.online/dashboard/wallet"
+INVOICE_FEE_NGN = "100.0"
+TRACKER_FEE_NGN = "200.0"
+MARKUP_PERCENT = "45.0"
+MARKUP_FLAT_NGN = "50.0"
+MIN_PRICE_NGN = "150.0"
+ENVIRONMENT = "production"

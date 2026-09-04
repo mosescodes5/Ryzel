@@ -5,7 +5,10 @@ import { useSearchParams } from 'next/navigation';
 import { Wallet } from 'lucide-react';
 import { DCard, DButton, PageHeader } from '@/components/dashboard/ui';
 
-const PRESET_AMOUNTS = [1000, 2500, 5000, 10000]; // in the smallest currency unit RYZEL stores (e.g. kobo)
+// Plain naira — no kobo conversion anywhere in this flow.
+const PRESET_AMOUNTS = [100, 500, 1000];
+
+const MIN_AMOUNT_NAIRA = 50; // must match MIN_TOPUP_CENTS in api/v1/wallet/topup/route.ts
 
 export default function WalletPage() {
   return (
@@ -19,7 +22,8 @@ function WalletPageContent() {
   const searchParams = useSearchParams();
   const referenceFromRedirect = searchParams.get('reference');
 
-  const [amount, setAmount] = useState(2500);
+  const [amount, setAmount] = useState(PRESET_AMOUNTS[1]);
+  const [customValue, setCustomValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [verifyStatus, setVerifyStatus] = useState<'checking' | 'succeeded' | 'pending' | 'failed' | null>(null);
@@ -33,7 +37,30 @@ function WalletPageContent() {
       .catch(() => setVerifyStatus('pending'));
   }, [referenceFromRedirect]);
 
+  function selectPreset(preset: number) {
+    setAmount(preset);
+    setCustomValue('');
+    setError(null);
+  }
+
+  function handleCustomChange(value: string) {
+    setCustomValue(value);
+    const parsed = Number(value);
+    if (value.trim() !== '' && !Number.isNaN(parsed) && parsed > 0) {
+      setAmount(parsed);
+      setError(null);
+    }
+  }
+
+  const isCustomActive = customValue.trim() !== '';
+  const isBelowMinimum = amount < MIN_AMOUNT_NAIRA;
+
   async function handleTopUp() {
+    if (isBelowMinimum) {
+      setError(`Minimum top-up is ${MIN_AMOUNT_NAIRA.toFixed(2)}`);
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
@@ -80,24 +107,51 @@ function WalletPageContent() {
           </span>
           <p className="text-sm font-medium text-slate-900">Choose an amount</p>
         </div>
+
         <div className="flex flex-wrap gap-2">
           {PRESET_AMOUNTS.map((preset) => (
             <button
               key={preset}
-              onClick={() => setAmount(preset)}
+              onClick={() => selectPreset(preset)}
               className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                amount === preset
+                !isCustomActive && amount === preset
                   ? 'bg-brand-600 text-white'
                   : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
               }`}
             >
-              {(preset / 100).toFixed(2)}
+              {preset.toFixed(2)}
             </button>
           ))}
         </div>
+
+        <div className="mt-3">
+          <label htmlFor="custom-amount" className="mb-1.5 block text-xs font-medium text-slate-500">
+            Or enter a custom amount
+          </label>
+          <div className="relative">
+            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">
+              ₦
+            </span>
+            <input
+              id="custom-amount"
+              type="number"
+              min={MIN_AMOUNT_NAIRA}
+              step="0.01"
+              inputMode="decimal"
+              value={customValue}
+              onChange={(e) => handleCustomChange(e.target.value)}
+              placeholder={`e.g. ${MIN_AMOUNT_NAIRA}`}
+              className={`w-full rounded-lg border py-2.5 pl-7 pr-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 ${
+                isCustomActive ? 'border-brand-600 ring-1 ring-brand-600' : 'border-slate-200'
+              }`}
+            />
+          </div>
+        </div>
+
         {error && <p className="mt-3 text-sm text-rose-600">{error}</p>}
-        <DButton className="mt-5 w-full" onClick={handleTopUp} disabled={loading}>
-          {loading ? 'Redirecting to Korapay…' : `Pay ${(amount / 100).toFixed(2)} with Korapay`}
+
+        <DButton className="mt-5 w-full" onClick={handleTopUp} disabled={loading || isBelowMinimum}>
+          {loading ? 'Redirecting to Korapay…' : `Pay ${amount.toFixed(2)} with Korapay`}
         </DButton>
       </DCard>
     </div>

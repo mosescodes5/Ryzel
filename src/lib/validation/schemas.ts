@@ -1,7 +1,14 @@
 import { z } from 'zod';
 
 export const topupSchema = z.object({
-  amountCents: z.number().int().positive().max(500_000_000) // sanity ceiling, not a business limit
+  // Plain naira (up to 2dp), despite the field name — see korapay-provider.ts.
+  // 5,000,000 sanity ceiling ~ equivalent real-world scale to the old
+  // 500,000,000 kobo ceiling; adjust if you want a different circuit breaker.
+  amountCents: z
+    .number()
+    .positive()
+    .multipleOf(0.01, 'Amounts can have at most 2 decimal places')
+    .max(5_000_000)
 });
 
 export const purchaseNumberSchema = z.object({

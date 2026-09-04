@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { getProductCatalog } from '@/modules/numbers/services/activation-service';
 
 // Runs on Cloudflare's Workers runtime via @cloudflare/next-on-pages.
-export const runtime = 'edge';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);

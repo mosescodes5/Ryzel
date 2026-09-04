@@ -3,7 +3,6 @@ import { createClient } from '@/lib/supabase/server';
 import { listActivationOrdersForUser } from '@/modules/numbers/services/activation-service';
 
 // Runs on Cloudflare's Workers runtime via @cloudflare/next-on-pages.
-export const runtime = 'edge';
 
 export async function GET() {
   const supabase = await createClient();

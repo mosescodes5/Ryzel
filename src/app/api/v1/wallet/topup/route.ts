@@ -5,9 +5,11 @@ import { checkRateLimit } from '@/lib/rate-limit/rate-limit';
 import { topupSchema, parseOrError } from '@/lib/validation/schemas';
 
 // Runs on Cloudflare's Workers runtime via @cloudflare/next-on-pages.
-export const runtime = 'edge';
 
-const MIN_TOPUP_CENTS = 100; // smallest allowed top-up, in minor units
+// Plain naira now (see korapay-provider.ts) — CONFIRM this is the minimum
+// you actually want; previously equivalent to ₦1 (100 kobo), now set to
+// match the wallet page UI's placeholder minimum. Change freely.
+const MIN_TOPUP_CENTS = 50;
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -32,18 +34,14 @@ export async function POST(request: Request) {
   const { amountCents } = parsed.data;
 
   if (amountCents < MIN_TOPUP_CENTS) {
-    return NextResponse.json({ error: `Minimum top-up is ${MIN_TOPUP_CENTS} minor units` }, { status: 400 });
+    return NextResponse.json({ error: `Minimum top-up is ${MIN_TOPUP_CENTS}` }, { status: 400 });
   }
 
   const currency = process.env.KORAPAY_DEFAULT_CURRENCY ?? 'NGN';
-  // crypto.randomUUID() is standard Web Crypto, available natively on
-  // Cloudflare Workers/Edge as well as Node — no 'node:crypto' import needed.
   const reference = `wallet_topup_${crypto.randomUUID()}`;
 
   const admin = createAdminClient();
 
-  // Record the attempt as pending before calling out to Korapay, so a
-  // dropped response still leaves a trace to reconcile from `/admin`.
   const { error: insertError } = await admin.from('payments').insert({
     user_id: user.id,
     provider: 'korapay',

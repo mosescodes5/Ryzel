@@ -3,7 +3,6 @@ import { createClient } from '@/lib/supabase/server';
 import { purchaseNumber } from '@/modules/numbers/services/number-service';
 
 // Runs on Cloudflare's Workers runtime via @cloudflare/next-on-pages.
-export const runtime = 'edge';
 
 export async function POST(request: Request, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;

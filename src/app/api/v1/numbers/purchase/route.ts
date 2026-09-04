@@ -5,7 +5,6 @@ import { checkRateLimit } from '@/lib/rate-limit/rate-limit';
 import { purchaseNumberSchema, parseOrError } from '@/lib/validation/schemas';
 
 // Runs on Cloudflare's Workers runtime via @cloudflare/next-on-pages.
-export const runtime = 'edge';
 
 export async function POST(request: Request) {
   const supabase = await createClient();

@@ -45,8 +45,12 @@ const config: Config = {
         }
       },
       fontFamily: {
-        display: ['"Space Grotesk"', 'system-ui', 'sans-serif'],
-        body: ['Inter', 'system-ui', 'sans-serif']
+        // Pointed at the CSS variables next/font generates in layout.tsx,
+        // rather than bare font-family strings — this is what actually
+        // makes the fonts load (preloaded, no external <link>, no layout
+        // shift), where the previous strings-only config never did.
+        display: ['var(--font-space-grotesk)', 'system-ui', 'sans-serif'],
+        body: ['var(--font-inter)', 'system-ui', 'sans-serif']
       },
       borderRadius: {
         sm: '4px',

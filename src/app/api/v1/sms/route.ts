@@ -4,7 +4,6 @@ import { recordInboundSms } from '@/modules/sms/services/sms-service';
 import { inboundSmsWebhookSchema, parseOrError } from '@/lib/validation/schemas';
 
 // Runs on Cloudflare's Workers runtime via @cloudflare/next-on-pages.
-export const runtime = 'edge';
 
 /**
  * Inbound webhook for a *future* carrier that pushes SMS directly (Twilio,

@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { getPackageByTrackingNumber } from '@/lib/packages/package-service';
 
 // Runs on Cloudflare's Workers runtime via @cloudflare/next-on-pages.
-export const runtime = 'edge';
 
 // This is a genuinely public, unauthenticated lookup (same trust model as
 // this app's own /track/[trackingNumber] page — the tracking number itself
