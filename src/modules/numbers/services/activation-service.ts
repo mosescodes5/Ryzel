@@ -106,10 +106,16 @@ export async function purchaseActivationNumber({
   const pricing = await getPricingRuleAsAdmin(product);
   const quotedPriceCents = applyMarkup(match.costCents, pricing);
 
+  // One id ties the debit to its refund, so a retried failure path can never refund twice.
+  const purchaseRef = crypto.randomUUID();
+
   await debitWallet({
     userId,
     amountCents: quotedPriceCents,
-    reason: 'number_purchase'
+    reason: 'number_purchase',
+    referenceType: 'number_purchase',
+    referenceId: purchaseRef,
+    idempotencyKey: `purchase:${purchaseRef}`
   });
 
   const admin = createAdminClient();
@@ -146,10 +152,15 @@ export async function purchaseActivationNumber({
     // (via cost_cents on the row) the profit baseline — no second debit needed.
     return row;
   } catch (err) {
+    // KNOWN RISK (to be replaced by the reserve/reconcile state machine): if the provider call
+    // timed out, a number may exist upstream. This refund is at least now idempotent.
     await creditWallet({
       userId,
       amountCents: quotedPriceCents,
-      reason: 'number_purchase_refund'
+      reason: 'number_purchase_refund',
+      referenceType: 'number_purchase',
+      referenceId: purchaseRef,
+      idempotencyKey: `purchase_refund:${purchaseRef}`
     });
     throw err;
   }
@@ -298,6 +309,9 @@ export async function cancelActivationOrder({ userId, orderId }: { userId: strin
   if (order.status === 'received' || order.status === 'finished') {
     throw new Error('Cannot cancel — a code was already delivered for this number.');
   }
+  if (order.status === 'cancelled') {
+    return { refundedCents: 0 }; // already cancelled (and refunded) — never refund twice
+  }
 
   const provider = getActivationProvider();
   if (order.provider_order_id) {
@@ -311,7 +325,8 @@ export async function cancelActivationOrder({ userId, orderId }: { userId: strin
     amountCents: order.price_cents,
     reason: 'number_cancel_refund',
     referenceType: 'number_orders',
-    referenceId: order.id
+    referenceId: order.id,
+    idempotencyKey: `cancel_refund:${order.id}`
   });
 
   return { refundedCents: order.price_cents };

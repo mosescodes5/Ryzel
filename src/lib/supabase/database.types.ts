@@ -68,6 +68,8 @@ export type Database = {
           reason: string;
           reference_type: string | null;
           reference_id: string | null;
+          idempotency_key: string | null;
+          balance_after_cents: number | null;
           created_at: string;
         };
         Insert: Partial<Database['public']['Tables']['transactions']['Row']> & {
@@ -276,6 +278,22 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      wallet_apply: {
+        Args: {
+          p_user: string;
+          p_type: 'credit' | 'debit';
+          p_amount: number;
+          p_reason: string;
+          p_ref_type: string | null;
+          p_ref_id: string | null;
+          p_key: string | null;
+        };
+        Returns: { new_balance: number; applied: boolean }[];
+      };
+      settle_payment: {
+        Args: { p_reference: string; p_verified_amount: number; p_verified_currency: string };
+        Returns: { outcome: string; new_balance: number | null }[];
+      };
       increment_rate_limit: {
         Args: { p_key: string; p_window_start: string };
         Returns: number;
