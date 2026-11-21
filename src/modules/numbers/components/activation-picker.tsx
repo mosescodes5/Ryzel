@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Search } from 'lucide-react';
-import { formatCents } from '@/lib/utils';
+import { formatNaira } from '@/lib/utils';
 
 const COUNTRIES = [
   { code: 'usa', label: 'United States' },
@@ -15,7 +15,7 @@ const COUNTRIES = [
   { code: 'russia', label: 'Russia' }
 ];
 
-type Quote = { product: string; operator: string; priceCents: number; quantity: number };
+type Quote = { product: string; operator: string; priceNaira: number; quantity: number };
 
 export function ActivationPicker() {
   const router = useRouter();
@@ -117,7 +117,7 @@ export function ActivationPicker() {
               {filtered.slice(0, 40).map((quote) => (
                 <tr key={quote.product} className="border-b border-slate-50 last:border-0">
                   <td className="px-4 py-3.5 font-medium capitalize text-slate-900">{quote.product}</td>
-                  <td className="px-4 py-3.5 text-slate-700">{formatCents(quote.priceCents)}</td>
+                  <td className="px-4 py-3.5 text-slate-700">{formatNaira(quote.priceNaira)}</td>
                   <td className="px-4 py-3.5 text-slate-500">{quote.quantity}</td>
                   <td className="px-4 py-3.5 text-right">
                     <button

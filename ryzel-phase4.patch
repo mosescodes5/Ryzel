@@ -1,0 +1,2210 @@
+diff --git a/push-secrets.sh b/push-secrets.sh
+index 430bfc4..0022649 100644
+--- a/push-secrets.sh
++++ b/push-secrets.sh
+@@ -36,8 +36,7 @@ PUBLIC_OR_HARMLESS_KEYS=(
+   "PROVIDER_BASE_URL"
+   "PROVIDER_FALLBACK"
+   "ORDER_TIMEOUT_SECONDS"
+-  "USD_NGN_RATE"
+-  "FIVESIM_RATE_TO_WALLET_MINOR_UNITS"
++  "FIVESIM_NGN_PER_UNIT"
+   "BREVO_SENDER_NAME"
+   "BREVO_SENDER_EMAIL"
+   "PAYMENTS_PROVIDER"
+diff --git a/src/app/api/v1/numbers/purchase/route.ts b/src/app/api/v1/numbers/purchase/route.ts
+index 0cfff45..e568e7c 100644
+--- a/src/app/api/v1/numbers/purchase/route.ts
++++ b/src/app/api/v1/numbers/purchase/route.ts
+@@ -1,6 +1,6 @@
+ import { NextResponse } from 'next/server';
+ import { createClient } from '@/lib/supabase/server';
+-import { purchaseActivationNumber } from '@/modules/numbers/services/activation-service';
++import { purchaseActivationNumber, PurchasePendingError } from '@/modules/numbers/services/activation-service';
+ import { checkRateLimit } from '@/lib/rate-limit/rate-limit';
+ import { purchaseNumberSchema, parseOrError } from '@/lib/validation/schemas';
+ 
+@@ -33,6 +33,13 @@ export async function POST(request: Request) {
+     const order = await purchaseActivationNumber({ userId: user.id, ...parsed.data });
+     return NextResponse.json({ data: order }, { status: 201 });
+   } catch (err) {
++    if (err instanceof PurchasePendingError) {
++      // Charged and recorded, number not yet confirmed: not an error, and not a failure.
++      return NextResponse.json(
++        { data: { id: err.orderId, status: 'purchasing' }, message: err.message },
++        { status: 202 }
++      );
++    }
+     const message = err instanceof Error ? err.message : 'Purchase failed';
+     return NextResponse.json({ error: message }, { status: 400 });
+   }
+diff --git a/src/app/dashboard/admin/orders/page.tsx b/src/app/dashboard/admin/orders/page.tsx
+index 5be5aa6..9ccbebc 100644
+--- a/src/app/dashboard/admin/orders/page.tsx
++++ b/src/app/dashboard/admin/orders/page.tsx
+@@ -3,7 +3,7 @@ import { Wallet, Receipt, TrendingUp } from 'lucide-react';
+ import { getCurrentUserWithRole } from '@/lib/permissions/permissions';
+ import { createAdminClient } from '@/lib/supabase/server';
+ import { DCard, PageHeader, StatusBadge } from '@/components/dashboard/ui';
+-import { formatCents } from '@/lib/utils';
++import { formatNaira } from '@/lib/utils';
+ 
+ export default async function DashboardAdminOrdersPage() {
+   const { user, role } = await getCurrentUserWithRole();
+@@ -18,8 +18,10 @@ export default async function DashboardAdminOrdersPage() {
+     .limit(300);
+ 
+   const rows = orders ?? [];
+-  const totalRevenue = rows.reduce((sum: number, o) => sum + o.price_cents, 0);
+-  const totalCost = rows.reduce((sum: number, o) => sum + o.cost_cents, 0);
++  // Only orders that actually delivered a code earned money; refunded/cancelled/expired ones did not.
++  const earned = rows.filter((o) => o.status === 'received' || o.status === 'finished' || o.status === 'active');
++  const totalRevenue = earned.reduce((sum: number, o) => sum + o.price_cents, 0);
++  const totalCost = earned.reduce((sum: number, o) => sum + o.cost_cents, 0);
+   const totalProfit = totalRevenue - totalCost;
+ 
+   return (
+@@ -33,7 +35,7 @@ export default async function DashboardAdminOrdersPage() {
+           </span>
+           <div>
+             <p className="text-xs text-slate-500">Revenue (charged to customers)</p>
+-            <p className="mt-0.5 text-lg font-semibold text-slate-900">{formatCents(totalRevenue)}</p>
++            <p className="mt-0.5 text-lg font-semibold text-slate-900">{formatNaira(totalRevenue)}</p>
+           </div>
+         </DCard>
+         <DCard className="flex items-center gap-4">
+@@ -42,7 +44,7 @@ export default async function DashboardAdminOrdersPage() {
+           </span>
+           <div>
+             <p className="text-xs text-slate-500">Cost (paid to 5Sim)</p>
+-            <p className="mt-0.5 text-lg font-semibold text-slate-900">{formatCents(totalCost)}</p>
++            <p className="mt-0.5 text-lg font-semibold text-slate-900">{formatNaira(totalCost)}</p>
+           </div>
+         </DCard>
+         <DCard className="flex items-center gap-4 border-emerald-200 bg-emerald-50/60">
+@@ -51,7 +53,7 @@ export default async function DashboardAdminOrdersPage() {
+           </span>
+           <div>
+             <p className="text-xs text-emerald-700">Profit</p>
+-            <p className="mt-0.5 text-lg font-semibold text-emerald-700">{formatCents(totalProfit)}</p>
++            <p className="mt-0.5 text-lg font-semibold text-emerald-700">{formatNaira(totalProfit)}</p>
+           </div>
+         </DCard>
+       </div>
+@@ -85,17 +87,17 @@ export default async function DashboardAdminOrdersPage() {
+                       <td className="px-5 py-3.5 capitalize text-slate-500">{order.product ?? '—'}</td>
+                       <td className="px-5 py-3.5 text-slate-500">{order.country ?? '—'}</td>
+                       <td className="whitespace-nowrap px-5 py-3.5 text-slate-800">
+-                        {formatCents(order.price_cents)}
++                        {formatNaira(order.price_cents)}
+                       </td>
+                       <td className="whitespace-nowrap px-5 py-3.5 text-slate-500">
+-                        {formatCents(order.cost_cents)}
++                        {formatNaira(order.cost_cents)}
+                       </td>
+                       <td
+                         className={`whitespace-nowrap px-5 py-3.5 font-medium ${
+                           profit >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                         }`}
+                       >
+-                        {formatCents(profit)}
++                        {formatNaira(profit)}
+                       </td>
+                       <td className="px-5 py-3.5">
+                         <StatusBadge status={order.status} />
+diff --git a/src/app/dashboard/admin/page.tsx b/src/app/dashboard/admin/page.tsx
+index c49f8e8..25eed66 100644
+--- a/src/app/dashboard/admin/page.tsx
++++ b/src/app/dashboard/admin/page.tsx
+@@ -4,7 +4,7 @@ import { Users, Receipt, Layers, TrendingUp, ArrowUpRight, Wallet } from 'lucide
+ import { getCurrentUserWithRole } from '@/lib/permissions/permissions';
+ import { createAdminClient } from '@/lib/supabase/server';
+ import { DCard, DButton, PageHeader, StatusBadge } from '@/components/dashboard/ui';
+-import { formatCents } from '@/lib/utils';
++import { formatNaira } from '@/lib/utils';
+ 
+ export default async function DashboardAdminOverviewPage() {
+   const { user, role } = await getCurrentUserWithRole();
+@@ -26,8 +26,10 @@ export default async function DashboardAdminOverviewPage() {
+     ]);
+ 
+   const rows = allOrders ?? [];
+-  const totalRevenue = rows.reduce((sum: number, o) => sum + o.price_cents, 0);
+-  const totalCost = rows.reduce((sum: number, o) => sum + o.cost_cents, 0);
++  // Only orders that actually delivered a code earned money; refunded/cancelled/expired ones did not.
++  const earned = rows.filter((o) => o.status === 'received' || o.status === 'finished' || o.status === 'active');
++  const totalRevenue = earned.reduce((sum: number, o) => sum + o.price_cents, 0);
++  const totalCost = earned.reduce((sum: number, o) => sum + o.cost_cents, 0);
+   const totalProfit = totalRevenue - totalCost;
+   const margin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+   const recentOrders = rows.slice(0, 6);
+@@ -53,7 +55,7 @@ export default async function DashboardAdminOverviewPage() {
+           </span>
+           <div>
+             <p className="text-xs text-slate-500">Total revenue</p>
+-            <p className="mt-0.5 text-lg font-semibold text-slate-900">{formatCents(totalRevenue)}</p>
++            <p className="mt-0.5 text-lg font-semibold text-slate-900">{formatNaira(totalRevenue)}</p>
+           </div>
+         </DCard>
+         <DCard className="flex items-center gap-4">
+@@ -62,7 +64,7 @@ export default async function DashboardAdminOverviewPage() {
+           </span>
+           <div>
+             <p className="text-xs text-slate-500">Provider cost</p>
+-            <p className="mt-0.5 text-lg font-semibold text-slate-900">{formatCents(totalCost)}</p>
++            <p className="mt-0.5 text-lg font-semibold text-slate-900">{formatNaira(totalCost)}</p>
+           </div>
+         </DCard>
+         <DCard className="flex items-center gap-4 border-emerald-200 bg-emerald-50/60">
+@@ -72,7 +74,7 @@ export default async function DashboardAdminOverviewPage() {
+           <div>
+             <p className="text-xs text-emerald-700">Total profit</p>
+             <p className="mt-0.5 text-lg font-semibold text-emerald-700">
+-              {formatCents(totalProfit)}{' '}
++              {formatNaira(totalProfit)}{' '}
+               <span className="text-xs font-normal text-emerald-600">({margin.toFixed(1)}% margin)</span>
+             </p>
+           </div>
+@@ -148,10 +150,10 @@ export default async function DashboardAdminOverviewPage() {
+                     <tr key={order.id} className="border-b border-slate-50 last:border-0">
+                       <td className="px-5 py-3.5 font-medium text-slate-800">{order.phone_number ?? '—'}</td>
+                       <td className="px-5 py-3.5 capitalize text-slate-500">{order.product ?? '—'}</td>
+-                      <td className="px-5 py-3.5 text-slate-800">{formatCents(order.price_cents)}</td>
+-                      <td className="px-5 py-3.5 text-slate-500">{formatCents(order.cost_cents)}</td>
++                      <td className="px-5 py-3.5 text-slate-800">{formatNaira(order.price_cents)}</td>
++                      <td className="px-5 py-3.5 text-slate-500">{formatNaira(order.cost_cents)}</td>
+                       <td className={`px-5 py-3.5 font-medium ${profit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+-                        {formatCents(profit)}
++                        {formatNaira(profit)}
+                       </td>
+                       <td className="px-5 py-3.5">
+                         <StatusBadge status={order.status} />
+diff --git a/src/app/dashboard/admin/pricing/page.tsx b/src/app/dashboard/admin/pricing/page.tsx
+index acbd207..46947a1 100644
+--- a/src/app/dashboard/admin/pricing/page.tsx
++++ b/src/app/dashboard/admin/pricing/page.tsx
+@@ -5,7 +5,7 @@ import { createAdminClient } from '@/lib/supabase/server';
+ import { DCard, DButton, PageHeader } from '@/components/dashboard/ui';
+ import { listServiceOverrides, applyMarkup, type PricingRule } from '@/lib/pricing/number-pricing';
+ import { getActivationProvider } from '@/modules/numbers/providers/activation-provider-manager';
+-import { formatCents } from '@/lib/utils';
++import { formatNaira } from '@/lib/utils';
+ import { updatePricing, saveServiceOverride, removeServiceOverride } from './actions';
+ 
+ // Reference country used only to show admins roughly what 5Sim currently
+@@ -18,7 +18,7 @@ async function getReferenceCosts(): Promise<Record<string, number>> {
+   try {
+     const provider = getActivationProvider();
+     const products = await provider.listProducts({ country: REFERENCE_COUNTRY });
+-    return Object.fromEntries(products.map((p) => [p.product, p.costCents]));
++    return Object.fromEntries(products.map((p) => [p.product, p.costNaira]));
+   } catch {
+     // 5sim can be briefly unreachable — the page still works, just without
+     // the reference cost column.
+@@ -143,17 +143,17 @@ export default async function DashboardPricingPage() {
+                     <tr key={override.product} className="border-b border-slate-50 last:border-0">
+                       <td className="px-5 py-3.5 font-medium capitalize text-slate-800">{override.product}</td>
+                       <td className="px-5 py-3.5 text-slate-500">
+-                        {refCost !== undefined ? formatCents(refCost) : '—'}
++                        {refCost !== undefined ? formatNaira(refCost) : '—'}
+                       </td>
+                       <td className="px-5 py-3.5 text-slate-500">
+                         {override.markupType === 'percent'
+                           ? `+${override.markupPercent}%`
+-                          : `+${formatCents(override.markupFlatCents)} flat`}
++                          : `+${formatNaira(override.markupFlatCents)} flat`}
+                         {' · min '}
+-                        {formatCents(override.minPriceCents)}
++                        {formatNaira(override.minPriceCents)}
+                       </td>
+                       <td className="px-5 py-3.5 font-medium text-emerald-600">
+-                        {refCost !== undefined ? formatCents(applyMarkup(refCost, rule)) : '—'}
++                        {refCost !== undefined ? formatNaira(applyMarkup(refCost, rule)) : '—'}
+                       </td>
+                       <td className="px-5 py-3.5 text-right">
+                         <form action={removeServiceOverride}>
+diff --git a/src/app/dashboard/admin/users/page.tsx b/src/app/dashboard/admin/users/page.tsx
+index fb2f2b5..c1d36c2 100644
+--- a/src/app/dashboard/admin/users/page.tsx
++++ b/src/app/dashboard/admin/users/page.tsx
+@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
+ import { getCurrentUserWithRole } from '@/lib/permissions/permissions';
+ import { createAdminClient } from '@/lib/supabase/server';
+ import { DCard, PageHeader } from '@/components/dashboard/ui';
+-import { formatCents } from '@/lib/utils';
++import { formatNaira } from '@/lib/utils';
+ 
+ export default async function DashboardAdminUsersPage() {
+   const { user, role } = await getCurrentUserWithRole();
+@@ -52,7 +52,7 @@ export default async function DashboardAdminUsersPage() {
+                       {u.role}
+                     </span>
+                   </td>
+-                  <td className="px-5 py-3.5 text-slate-800">{formatCents(u.wallet_balance_cents)}</td>
++                  <td className="px-5 py-3.5 text-slate-800">{formatNaira(u.wallet_balance_cents)}</td>
+                   <td className="whitespace-nowrap px-5 py-3.5 text-xs text-slate-400">
+                     {new Date(u.created_at).toLocaleDateString()}
+                   </td>
+diff --git a/src/app/dashboard/orders/page.tsx b/src/app/dashboard/orders/page.tsx
+index eb04fdc..62aa3f5 100644
+--- a/src/app/dashboard/orders/page.tsx
++++ b/src/app/dashboard/orders/page.tsx
+@@ -3,7 +3,7 @@
+ import { useCallback, useEffect, useState } from 'react';
+ import { RefreshCw, XCircle, Copy } from 'lucide-react';
+ import { DCard, DButton, StatusBadge, PageHeader } from '@/components/dashboard/ui';
+-import { formatCents } from '@/lib/utils';
++import { formatNaira } from '@/lib/utils';
+ 
+ type Order = {
+   id: string;
+@@ -104,7 +104,7 @@ export default function OrdersPage() {
+               </div>
+               <div>
+                 <p className="text-xs text-slate-400">Price</p>
+-                <p className="mt-0.5 font-medium text-emerald-600">{formatCents(order.price_cents)}</p>
++                <p className="mt-0.5 font-medium text-emerald-600">{formatNaira(order.price_cents)}</p>
+               </div>
+               <div>
+                 <p className="text-xs text-slate-400">Status</p>
+diff --git a/src/app/dashboard/page.tsx b/src/app/dashboard/page.tsx
+index eddb58d..d2c6855 100644
+--- a/src/app/dashboard/page.tsx
++++ b/src/app/dashboard/page.tsx
+@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
+ import { Wallet, Smartphone, ClipboardList, MessageCircle, ArrowUpRight } from 'lucide-react';
+ import { createClient } from '@/lib/supabase/server';
+ import { DCard, DButton, StatusBadge, PageHeader } from '@/components/dashboard/ui';
+-import { formatCents } from '@/lib/utils';
++import { formatNaira } from '@/lib/utils';
+ import { listActivationOrdersForUser } from '@/modules/numbers/services/activation-service';
+ import { BuyNumberPanel } from '@/modules/numbers/components/buy-number-panel';
+ 
+@@ -55,7 +55,7 @@ export default async function DashboardOverviewPage() {
+           <div>
+             <p className="text-xs text-slate-500">Wallet balance</p>
+             <p className="mt-0.5 text-lg font-semibold text-slate-900">
+-              {formatCents(profile?.wallet_balance_cents ?? 0)}
++              {formatNaira(profile?.wallet_balance_cents ?? 0)}
+             </p>
+           </div>
+         </DCard>
+@@ -129,7 +129,7 @@ export default async function DashboardOverviewPage() {
+                       {order.product ?? '—'}
+                     </td>
+                     <td className="px-5 py-3.5 text-slate-500">{order.country ?? '—'}</td>
+-                    <td className="px-5 py-3.5 text-slate-500">{formatCents(order.price_cents)}</td>
++                    <td className="px-5 py-3.5 text-slate-500">{formatNaira(order.price_cents)}</td>
+                     <td className="px-5 py-3.5">
+                       <StatusBadge status={order.status} />
+                     </td>
+diff --git a/src/app/dashboard/transactions/page.tsx b/src/app/dashboard/transactions/page.tsx
+index f6c26af..b7911d5 100644
+--- a/src/app/dashboard/transactions/page.tsx
++++ b/src/app/dashboard/transactions/page.tsx
+@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
+ import { ArrowDownLeft, ArrowUpRight } from 'lucide-react';
+ import { createClient } from '@/lib/supabase/server';
+ import { DCard, PageHeader } from '@/components/dashboard/ui';
+-import { formatCents } from '@/lib/utils';
++import { formatNaira } from '@/lib/utils';
+ 
+ const REASON_LABEL: Record<string, string> = {
+   wallet_topup: 'Wallet top-up',
+@@ -61,7 +61,7 @@ export default async function TransactionsPage() {
+                   }`}
+                 >
+                   {tx.type === 'credit' ? '+' : '−'}
+-                  {formatCents(tx.amount_cents, tx.currency)}
++                  {formatNaira(tx.amount_cents)}
+                 </p>
+               </li>
+             ))}
+diff --git a/src/components/dashboard/sidebar.tsx b/src/components/dashboard/sidebar.tsx
+index 88534e2..eee11a7 100644
+--- a/src/components/dashboard/sidebar.tsx
++++ b/src/components/dashboard/sidebar.tsx
+@@ -20,7 +20,7 @@ import {
+   PackageSearch,
+   FileText
+ } from 'lucide-react';
+-import { cn, formatCents } from '@/lib/utils';
++import { cn, formatNaira } from '@/lib/utils';
+ 
+ type NavItem = {
+   href: string;
+@@ -86,7 +86,7 @@ export function Sidebar({
+           Wallet balance
+         </p>
+         <p className="mt-0.5 text-xl font-semibold text-emerald-950">
+-          {formatCents(walletBalanceCents)}
++          {formatNaira(walletBalanceCents)}
+         </p>
+       </div>
+ 
+diff --git a/src/components/dashboard/ui.tsx b/src/components/dashboard/ui.tsx
+index c08356c..5919f27 100644
+--- a/src/components/dashboard/ui.tsx
++++ b/src/components/dashboard/ui.tsx
+@@ -37,7 +37,9 @@ const STATUS_STYLES: Record<string, string> = {
+   awaiting_sms: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200',
+   cancelled: 'bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200',
+   expired: 'bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200',
+-  failed: 'bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200'
++  failed: 'bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200',
++  purchasing: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200',
++  needs_review: 'bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200'
+ };
+ 
+ const STATUS_LABEL: Record<string, string> = {
+@@ -45,9 +47,11 @@ const STATUS_LABEL: Record<string, string> = {
+   received: 'Code received',
+   active: 'Active',
+   awaiting_sms: 'Waiting for code',
+-  cancelled: 'Cancelled',
+-  expired: 'Expired',
+-  failed: 'Failed'
++  cancelled: 'Cancelled (refunded)',
++  expired: 'Expired (refunded)',
++  failed: 'Failed (refunded)',
++  purchasing: 'Confirming purchase',
++  needs_review: 'Under review'
+ };
+ 
+ export function StatusBadge({ status }: { status: string }) {
+diff --git a/src/lib/pricing/number-pricing.ts b/src/lib/pricing/number-pricing.ts
+index 8b8bb71..091776a 100644
+--- a/src/lib/pricing/number-pricing.ts
++++ b/src/lib/pricing/number-pricing.ts
+@@ -125,12 +125,16 @@ export async function deleteServiceOverride(product: string) {
+   if (error) throw error;
+ }
+ 
+-/** Applies the current markup to a provider cost, in minor units ("cents"). */
+-export function applyMarkup(costCents: number, rule: PricingRule): number {
++/**
++ * Applies the current markup to a provider cost. Everything is whole naira
++ * (the markup_flat_cents / min_price_cents columns keep their legacy names
++ * but hold naira). Always rounds UP so a sale can never undercharge.
++ */
++export function applyMarkup(costNaira: number, rule: PricingRule): number {
+   const marked =
+     rule.markupType === 'percent'
+-      ? Math.round(costCents * (1 + rule.markupPercent / 100))
+-      : costCents + rule.markupFlatCents;
++      ? Math.ceil(Math.round(costNaira * (1 + rule.markupPercent / 100) * 1e6) / 1e6)
++      : costNaira + rule.markupFlatCents;
+ 
+-  return Math.max(marked, rule.minPriceCents);
++  return Math.max(Math.ceil(marked), rule.minPriceCents);
+ }
+diff --git a/src/lib/supabase/database.types.ts b/src/lib/supabase/database.types.ts
+index 3ca78ae..c65326d 100644
+--- a/src/lib/supabase/database.types.ts
++++ b/src/lib/supabase/database.types.ts
+@@ -109,12 +109,24 @@ export type Database = {
+           country: string | null;
+           operator: string | null;
+           product: string | null;
+-          status: 'awaiting_sms' | 'received' | 'active' | 'finished' | 'cancelled' | 'expired' | 'failed';
++          status:
++            | 'purchasing'
++            | 'awaiting_sms'
++            | 'received'
++            | 'active'
++            | 'finished'
++            | 'cancelled'
++            | 'expired'
++            | 'failed'
++            | 'needs_review';
+           price_cents: number;
+           cost_cents: number;
+           renews_at: string | null;
+           expires_at: string | null;
+           last_checked_at: string | null;
++          purchase_started_at: string | null;
++          refunded_at: string | null;
++          review_note: string | null;
+           created_at: string;
+           updated_at: string;
+         };
+@@ -294,6 +306,21 @@ export type Database = {
+         Args: { p_reference: string; p_verified_amount: number; p_verified_currency: string };
+         Returns: { outcome: string; new_balance: number | null }[];
+       };
++      order_reserve: {
++        Args: {
++          p_user: string;
++          p_price: number;
++          p_provider: string;
++          p_country: string;
++          p_operator: string;
++          p_product: string;
++        };
++        Returns: { order_id: string; new_balance: number }[];
++      };
++      order_refund: {
++        Args: { p_order: string; p_final_status: 'cancelled' | 'expired' | 'failed'; p_reason: string };
++        Returns: { outcome: string; refunded: number }[];
++      };
+       increment_rate_limit: {
+         Args: { p_key: string; p_window_start: string };
+         Returns: number;
+diff --git a/src/lib/utils.ts b/src/lib/utils.ts
+index 956474c..a3c723c 100644
+--- a/src/lib/utils.ts
++++ b/src/lib/utils.ts
+@@ -4,8 +4,11 @@ export function cn(...inputs: ClassValue[]) {
+   return clsx(inputs);
+ }
+ 
+-export function formatCents(cents: number, currency = "NGN") {
+-  return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(
+-    cents / 100,
+-  );
++/** Formats a stored wallet/order amount. Amounts are whole naira — nothing is divided. */
++export function formatNaira(naira: number) {
++  return new Intl.NumberFormat("en-NG", {
++    style: "currency",
++    currency: "NGN",
++    maximumFractionDigits: 0,
++  }).format(naira);
+ }
+diff --git a/src/modules/numbers/components/activation-picker.tsx b/src/modules/numbers/components/activation-picker.tsx
+index 63bbf70..f0c23d0 100644
+--- a/src/modules/numbers/components/activation-picker.tsx
++++ b/src/modules/numbers/components/activation-picker.tsx
+@@ -3,7 +3,7 @@
+ import { useEffect, useState } from 'react';
+ import { useRouter } from 'next/navigation';
+ import { Search } from 'lucide-react';
+-import { formatCents } from '@/lib/utils';
++import { formatNaira } from '@/lib/utils';
+ 
+ const COUNTRIES = [
+   { code: 'usa', label: 'United States' },
+@@ -15,7 +15,7 @@ const COUNTRIES = [
+   { code: 'russia', label: 'Russia' }
+ ];
+ 
+-type Quote = { product: string; operator: string; priceCents: number; quantity: number };
++type Quote = { product: string; operator: string; priceNaira: number; quantity: number };
+ 
+ export function ActivationPicker() {
+   const router = useRouter();
+@@ -117,7 +117,7 @@ export function ActivationPicker() {
+               {filtered.slice(0, 40).map((quote) => (
+                 <tr key={quote.product} className="border-b border-slate-50 last:border-0">
+                   <td className="px-4 py-3.5 font-medium capitalize text-slate-900">{quote.product}</td>
+-                  <td className="px-4 py-3.5 text-slate-700">{formatCents(quote.priceCents)}</td>
++                  <td className="px-4 py-3.5 text-slate-700">{formatNaira(quote.priceNaira)}</td>
+                   <td className="px-4 py-3.5 text-slate-500">{quote.quantity}</td>
+                   <td className="px-4 py-3.5 text-right">
+                     <button
+diff --git a/src/modules/numbers/components/buy-number-panel.tsx b/src/modules/numbers/components/buy-number-panel.tsx
+index 4e69af8..2f9921e 100644
+--- a/src/modules/numbers/components/buy-number-panel.tsx
++++ b/src/modules/numbers/components/buy-number-panel.tsx
+@@ -4,11 +4,11 @@ import { useEffect, useState } from 'react';
+ import { useRouter } from 'next/navigation';
+ import { Search, Smartphone, ShieldCheck } from 'lucide-react';
+ import { DCard, DButton } from '@/components/dashboard/ui';
+-import { formatCents, cn } from '@/lib/utils';
++import { formatNaira, cn } from '@/lib/utils';
+ 
+ type Country = { code: string; name: string };
+-type Service = { product: string; operator: string; priceCents: number; quantity: number };
+-type Offer = { operator: string; priceCents: number; successRate: number | null; quantity: number };
++type Service = { product: string; operator: string; priceNaira: number; quantity: number };
++type Offer = { operator: string; priceNaira: number; successRate: number | null; quantity: number };
+ 
+ function formatOperatorLabel(operator: string) {
+   if (!operator || operator === 'any') return 'Standard';
+@@ -269,7 +269,7 @@ export function BuyNumberPanel() {
+                   <p className="text-sm font-semibold text-slate-900">{formatOperatorLabel(offer.operator)}</p>
+                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                     <span>
+-                      Price <span className="font-mono font-medium text-slate-800">{formatCents(offer.priceCents)}</span>
++                      Price <span className="font-mono font-medium text-slate-800">{formatNaira(offer.priceNaira)}</span>
+                     </span>
+                     {offer.successRate != null && (
+                       <span className={cn('rounded-full px-2 py-0.5 font-medium', successRateTone(offer.successRate))}>
+diff --git a/src/modules/numbers/components/number-card.tsx b/src/modules/numbers/components/number-card.tsx
+index ca2f4cb..d6f2b35 100644
+--- a/src/modules/numbers/components/number-card.tsx
++++ b/src/modules/numbers/components/number-card.tsx
+@@ -4,7 +4,7 @@ import { useState } from 'react';
+ import { useRouter } from 'next/navigation';
+ import { Card } from '@/components/ui/card';
+ import { Button } from '@/components/ui/button';
+-import { formatCents } from '@/lib/utils';
++import { formatNaira } from '@/lib/utils';
+ 
+ type Props = {
+   id: string;
+@@ -38,7 +38,7 @@ export function NumberCard({ id, phoneNumber, countryCode, monthlyPriceCents }:
+     <Card className="flex items-center justify-between">
+       <div>
+         <p className="font-medium text-slate-900">{phoneNumber}</p>
+-        <p className="text-sm text-slate-500">{countryCode} · {formatCents(monthlyPriceCents)}/mo</p>
++        <p className="text-sm text-slate-500">{countryCode} · {formatNaira(monthlyPriceCents)}/mo</p>
+         {error && <p className="mt-1 text-xs text-rose-600">{error}</p>}
+       </div>
+       <Button onClick={handlePurchase} disabled={loading}>
+diff --git a/src/modules/numbers/lib/naira.ts b/src/modules/numbers/lib/naira.ts
+new file mode 100644
+index 0000000..6607e57
+--- /dev/null
++++ b/src/modules/numbers/lib/naira.ts
+@@ -0,0 +1,44 @@
++/**
++ * Money on this platform is whole NAIRA. There is no kobo anywhere in the
++ * numbers flow. (The database columns are still named *_cents for legacy
++ * reasons, but they hold whole naira — see supabase/migrations/0012.)
++ */
++
++export class PricingConfigError extends Error {
++  constructor(message: string) {
++    super(message);
++    this.name = 'PricingConfigError';
++  }
++}
++
++/**
++ * FIVESIM_NGN_PER_UNIT = how many naira equal ONE unit of the `price` /
++ * `cost` field that 5sim returns. It must be set deliberately after checking
++ * which currency your 5sim account is billed in — if it is missing or
++ * invalid, selling numbers is switched off rather than guessing a price.
++ */
++export function parseNairaPerUnit(raw: string | undefined | null): number {
++  const rate = Number(raw);
++  if (!raw || !Number.isFinite(rate) || rate <= 0) {
++    throw new PricingConfigError(
++      'Number pricing is not configured yet (FIVESIM_NGN_PER_UNIT). Purchases are paused.'
++    );
++  }
++  return rate;
++}
++
++/** Converts a 5sim price into whole naira, always rounding UP so we never undercharge. */
++export function toNaira(providerPrice: number, nairaPerUnit: number): number {
++  if (!Number.isFinite(providerPrice) || providerPrice < 0) {
++    throw new PricingConfigError('Provider returned an invalid price.');
++  }
++  if (providerPrice === 0) return 0;
++  // Round to 6 dp first so 0.1 * 3 style float noise cannot push us up an extra naira.
++  const exact = Math.round(providerPrice * nairaPerUnit * 1e6) / 1e6;
++  return Math.max(1, Math.ceil(exact));
++}
++
++/** Formats whole naira for display, e.g. 1500 -> "₦1,500". */
++export function formatNairaAmount(naira: number): string {
++  return `₦${Math.round(naira).toLocaleString('en-NG')}`;
++}
+diff --git a/src/modules/numbers/lib/provider-errors.ts b/src/modules/numbers/lib/provider-errors.ts
+new file mode 100644
+index 0000000..2ac0fff
+--- /dev/null
++++ b/src/modules/numbers/lib/provider-errors.ts
+@@ -0,0 +1,53 @@
++/**
++ * Why a provider call failed matters more than that it failed: for a PURCHASE,
++ * "the provider said no" means nothing was bought (safe to refund), while
++ * "we never heard back" means a number may exist upstream (NOT safe to refund
++ * until we've checked).
++ */
++export type ProviderFailure =
++  | { kind: 'http'; status: number; body: string }
++  | { kind: 'network'; message: string }
++  | { kind: 'timeout' }
++  | { kind: 'invalid_response'; message: string };
++
++export class ProviderError extends Error {
++  readonly failure: ProviderFailure;
++  constructor(failure: ProviderFailure) {
++    super(describeFailure(failure));
++    this.name = 'ProviderError';
++    this.failure = failure;
++  }
++}
++
++function describeFailure(f: ProviderFailure): string {
++  switch (f.kind) {
++    case 'http':
++      return `Provider returned HTTP ${f.status}`;
++    case 'network':
++      return `Provider unreachable: ${f.message}`;
++    case 'timeout':
++      return 'Provider timed out';
++    case 'invalid_response':
++      return `Provider sent an unreadable response: ${f.message}`;
++  }
++}
++
++/**
++ * True ONLY when the provider clearly rejected the request, so no number was
++ * bought. Everything else (timeouts, dropped connections, 5xx, garbled
++ * replies) is UNCERTAIN: the purchase may have gone through.
++ */
++export function isDefiniteNonPurchase(f: ProviderFailure): boolean {
++  return f.kind === 'http' && f.status >= 400 && f.status < 500;
++}
++
++/** Customer-safe wording; never leaks the raw provider body. */
++export function customerMessageForRejection(f: ProviderFailure): string {
++  if (f.kind === 'http') {
++    const body = f.body.toLowerCase();
++    if (body.includes('no free phones') || body.includes('no numbers')) {
++      return 'No numbers are available for that service right now. You have not been charged.';
++    }
++  }
++  return 'We could not get a number for you this time. You have not been charged.';
++}
+diff --git a/src/modules/numbers/lib/reconcile.ts b/src/modules/numbers/lib/reconcile.ts
+new file mode 100644
+index 0000000..eeb12a8
+--- /dev/null
++++ b/src/modules/numbers/lib/reconcile.ts
+@@ -0,0 +1,91 @@
++/**
++ * Decides what to do with orders stuck in 'purchasing' (wallet debited, but we
++ * never recorded whether the provider really sold us a number).
++ *
++ * The rule that protects customers' money AND yours:
++ *   - ADOPT an upstream order only when it matches exactly one of our orders
++ *     and our order matches exactly one upstream order.
++ *   - REFUND only on positive evidence of absence: the provider's recent
++ *     history was read successfully, covers the time window, shows no
++ *     matching order, and enough time has passed.
++ *   - Anything unclear goes to a human ('review'); money stays held.
++ */
++
++export type PurchasingOrder = {
++  id: string;
++  country: string;
++  product: string;
++  operator: string; // the pool the customer picked; 'any' matches every operator
++  startedAtMs: number;
++};
++
++export type UpstreamActivation = {
++  providerOrderId: string;
++  createdAtMs: number;
++  country: string;
++  product: string;
++  operator: string | null; // history may not include it
++};
++
++export type ReconcileDecision =
++  | { action: 'adopt'; upstream: UpstreamActivation }
++  | { action: 'refund' }
++  | { action: 'review'; note: string }
++  | { action: 'wait' };
++
++export const CLOCK_SKEW_MS = 60_000; // provider clock vs ours
++export const MATCH_WINDOW_MS = 5 * 60_000; // a buy must show up within 5 min of our attempt
++export const ABSENCE_WAIT_MS = 10 * 60_000; // how long we wait before trusting "not there"
++
++export function reconcileBatch(args: {
++  orders: PurchasingOrder[];
++  upstream: UpstreamActivation[];
++  claimedProviderIds: Set<string>; // upstream ids already attached to some order of ours
++  historyFetchedOk: boolean;
++  historyCoversWindow: boolean;
++  nowMs: number;
++}): Map<string, ReconcileDecision> {
++  const out = new Map<string, ReconcileDecision>();
++  if (!args.historyFetchedOk) {
++    for (const o of args.orders) out.set(o.id, { action: 'wait' });
++    return out;
++  }
++
++  const free = args.upstream.filter((u) => !args.claimedProviderIds.has(u.providerOrderId));
++
++  const candidatesFor = (o: PurchasingOrder) =>
++    free.filter(
++      (u) =>
++        u.country === o.country &&
++        u.product === o.product &&
++        (o.operator === 'any' || u.operator === null || u.operator === o.operator) &&
++        u.createdAtMs >= o.startedAtMs - CLOCK_SKEW_MS &&
++        u.createdAtMs <= o.startedAtMs + MATCH_WINDOW_MS
++    );
++
++  const byOrder = new Map<string, UpstreamActivation[]>();
++  const ordersPerUpstream = new Map<string, number>();
++  for (const o of args.orders) {
++    const c = candidatesFor(o);
++    byOrder.set(o.id, c);
++    for (const u of c) ordersPerUpstream.set(u.providerOrderId, (ordersPerUpstream.get(u.providerOrderId) ?? 0) + 1);
++  }
++
++  for (const o of args.orders) {
++    const c = byOrder.get(o.id) ?? [];
++    const first = c[0];
++    if (c.length === 1 && first && ordersPerUpstream.get(first.providerOrderId) === 1) {
++      out.set(o.id, { action: 'adopt', upstream: first });
++    } else if (c.length >= 1) {
++      out.set(o.id, {
++        action: 'review',
++        note: `Ambiguous: ${c.length} provider order(s) could match this purchase, shared with other pending purchases.`
++      });
++    } else if (args.nowMs - o.startedAtMs >= ABSENCE_WAIT_MS && args.historyCoversWindow) {
++      out.set(o.id, { action: 'refund' });
++    } else {
++      out.set(o.id, { action: 'wait' });
++    }
++  }
++  return out;
++}
+diff --git a/src/modules/numbers/providers/activation-provider.ts b/src/modules/numbers/providers/activation-provider.ts
+index 0970439..a34a066 100644
+--- a/src/modules/numbers/providers/activation-provider.ts
++++ b/src/modules/numbers/providers/activation-provider.ts
+@@ -5,7 +5,7 @@ export type ActivationCountry = {
+ 
+ export type ActivationOffer = {
+   operator: string; // a specific pool id (or 'virtual21', 'beeline', etc — provider-specific), never 'any'
+-  costCents: number; // what the provider charges RYZEL for this pool, in minor units
++  costNaira: number; // what the provider charges RYZEL for this pool, in whole naira (rounded up)
+   successRate: number | null; // 0-100 historical delivery rate for this pool, if the provider reports one
+   quantity: number; // how many are currently available in this pool
+ };
+@@ -13,17 +13,25 @@ export type ActivationOffer = {
+ export type ActivationProduct = {
+   product: string; // e.g. 'telegram', 'whatsapp', 'google'
+   operator: string; // e.g. 'any', or a specific carrier the provider uses
+-  costCents: number; // what the provider charges RYZEL, in minor units
++  costNaira: number; // what the provider charges RYZEL, in whole naira (rounded up)
+   quantity: number; // how many are currently available
+ };
+ 
++export type UpstreamActivationSummary = {
++  providerOrderId: string;
++  createdAtMs: number;
++  country: string;
++  product: string;
++  operator: string | null;
++};
++
+ export type ActivationOrder = {
+   providerOrderId: string;
+   phoneNumber: string;
+   product: string;
+   operator: string;
+   country: string;
+-  costCents: number;
++  costNaira: number;
+   status: 'awaiting_sms' | 'received' | 'cancelled' | 'expired' | 'finished' | 'failed';
+   smsCode: string | null;
+   smsText: string | null;
+@@ -45,4 +53,6 @@ export interface ActivationProvider {
+   checkOrder(providerOrderId: string): Promise<ActivationOrder>;
+   cancelOrder(providerOrderId: string): Promise<void>;
+   finishOrder(providerOrderId: string): Promise<void>;
++  /** Newest-first list of what we recently bought upstream; used to settle purchases whose outcome we never saw. */
++  listRecentActivations(limit: number): Promise<UpstreamActivationSummary[]>;
+ }
+diff --git a/src/modules/numbers/providers/fivesim/client.ts b/src/modules/numbers/providers/fivesim/client.ts
+index aef821f..463e3c2 100644
+--- a/src/modules/numbers/providers/fivesim/client.ts
++++ b/src/modules/numbers/providers/fivesim/client.ts
+@@ -1,29 +1,70 @@
+ import type { FiveSimCountriesResponse, FiveSimGuestPrices, FiveSimGuestProducts, FiveSimOrder } from './types';
++import { ProviderError } from '../../lib/provider-errors';
++import type { UpstreamActivationSummary } from '../activation-provider';
+ 
+ const BASE_URL = process.env.PROVIDER_BASE_URL || 'https://5sim.net/v1';
+ 
++const READ_TIMEOUT_MS = 10_000;
++const BUY_TIMEOUT_MS = 15_000;
++
+ function getApiKey() {
+   const key = process.env.PROVIDER_API_KEY || process.env.FIVESIM_API_KEY;
+   if (!key) throw new Error('PROVIDER_API_KEY (or FIVESIM_API_KEY) is not set');
+   return key;
+ }
+ 
+-async function fivesimFetch<T>(path: string, opts: { auth?: boolean } = {}): Promise<T> {
++/**
++ * Every failure is thrown as a ProviderError that says WHY: a clear rejection
++ * (4xx) vs. a timeout / dropped connection / 5xx / unreadable reply. Purchases
++ * rely on that difference to decide whether a refund is safe.
++ */
++async function fivesimFetch<T>(path: string, opts: { auth?: boolean; timeoutMs?: number } = {}): Promise<T> {
+   const headers: Record<string, string> = { Accept: 'application/json' };
+   if (opts.auth !== false) {
+     headers.Authorization = `Bearer ${getApiKey()}`;
+   }
+ 
+-  const res = await fetch(`${BASE_URL}${path}`, { headers });
++  let res: Response;
++  try {
++    res = await fetch(`${BASE_URL}${path}`, {
++      headers,
++      signal: AbortSignal.timeout(opts.timeoutMs ?? READ_TIMEOUT_MS)
++    });
++  } catch (err) {
++    const name = err instanceof Error ? err.name : '';
++    if (name === 'TimeoutError' || name === 'AbortError') throw new ProviderError({ kind: 'timeout' });
++    throw new ProviderError({ kind: 'network', message: err instanceof Error ? err.message : 'fetch failed' });
++  }
+ 
+   if (!res.ok) {
+-    const text = await res.text().catch(() => '');
+-    throw new Error(`5sim request failed (${res.status} ${path}): ${text || res.statusText}`);
++    const body = await res.text().catch(() => '');
++    throw new ProviderError({ kind: 'http', status: res.status, body: body.slice(0, 300) });
+   }
+ 
+-  return res.json();
++  const text = await res.text().catch(() => '');
++  try {
++    return JSON.parse(text) as T;
++  } catch (err) {
++    // 5sim answers some refusals as a plain-text line (even with HTTP 200). Those are
++    // clear "nothing was bought" answers; any OTHER unreadable reply stays uncertain.
++    if (KNOWN_PLAIN_TEXT_REFUSALS.some((phrase) => text.trim().toLowerCase().startsWith(phrase))) {
++      throw new ProviderError({ kind: 'http', status: 400, body: text.slice(0, 300) });
++    }
++    throw new ProviderError({ kind: 'invalid_response', message: err instanceof Error ? err.message : 'bad json' });
++  }
+ }
+ 
++const KNOWN_PLAIN_TEXT_REFUSALS = [
++  'no free phones',
++  'not enough user balance',
++  'not enough rating',
++  'no product',
++  'bad country',
++  'bad operator',
++  'select country',
++  'select operator'
++];
++
+ /** Guest endpoint — no API key needed. Every country 5sim currently sells numbers for. */
+ export function getGuestCountries() {
+   return fivesimFetch<FiveSimCountriesResponse>('/guest/countries', { auth: false });
+@@ -34,23 +75,26 @@ export function getGuestProducts(country: string, operator = 'any') {
+   return fivesimFetch<FiveSimGuestProducts>(`/guest/products/${country}/${operator}`, { auth: false });
+ }
+ 
+-/**
+- * Guest endpoint — no API key needed. Per-operator breakdown (cost, stock,
+- * historical success rate) for one product in one country — this is what
+- * powers the "Available Numbers" list shown after Check Availability,
+- * since a single product can have several operator pools at different
+- * prices/success rates.
+- */
++/** Guest endpoint — per-operator breakdown (cost, stock, success rate) for one product in one country. */
+ export function getGuestPrices(country: string, product: string) {
+   const params = new URLSearchParams({ country, product });
+   return fivesimFetch<FiveSimGuestPrices>(`/guest/prices?${params.toString()}`, { auth: false });
+ }
+ 
+-/** Buys one activation number. 5sim debits your 5sim balance immediately on success. */
+-export function buyActivation(params: { country: string; operator: string; product: string }) {
+-  return fivesimFetch<FiveSimOrder>(
+-    `/user/buy/activation/${params.country}/${params.operator}/${params.product}`
++/**
++ * Buys one activation number. 5sim debits your 5sim balance immediately on success.
++ * NEVER retried automatically: a retry after a timeout could buy a second number.
++ * A "200" whose body lacks an id/phone is treated as an unreadable reply (uncertain).
++ */
++export async function buyActivation(params: { country: string; operator: string; product: string }) {
++  const order = await fivesimFetch<FiveSimOrder>(
++    `/user/buy/activation/${params.country}/${params.operator}/${params.product}`,
++    { timeoutMs: BUY_TIMEOUT_MS }
+   );
++  if (!order || typeof order !== 'object' || order.id == null || !order.phone) {
++    throw new ProviderError({ kind: 'invalid_response', message: 'buy reply missing id or phone' });
++  }
++  return order;
+ }
+ 
+ export function checkOrder(orderId: string) {
+@@ -68,3 +112,46 @@ export function finishOrder(orderId: string) {
+ export function getBalance() {
+   return fivesimFetch<{ balance: number; rating: number }>('/user/profile');
+ }
++
++function pick(row: Record<string, unknown>, ...keys: string[]): unknown {
++  for (const k of keys) if (row[k] !== undefined && row[k] !== null) return row[k];
++  return undefined;
++}
++
++/** Newest-first list of our recent activation purchases at 5sim. */
++export async function listRecentActivations(limit: number): Promise<UpstreamActivationSummary[]> {
++  const params = new URLSearchParams({
++    category: 'activation',
++    limit: String(limit),
++    offset: '0',
++    order: 'id',
++    reverse: 'true'
++  });
++  const body = await fivesimFetch<Record<string, unknown>>(`/user/orders?${params.toString()}`);
++  const rows = (pick(body, 'Data', 'data') as Record<string, unknown>[] | undefined) ?? null;
++  if (!Array.isArray(rows)) {
++    throw new ProviderError({ kind: 'invalid_response', message: 'orders history had no data array' });
++  }
++
++  const out: UpstreamActivationSummary[] = [];
++  for (const row of rows) {
++    const id = pick(row, 'ID', 'id');
++    const created = pick(row, 'CreatedAt', 'created_at');
++    const country = pick(row, 'Country', 'country');
++    const product = pick(row, 'Product', 'product');
++    const createdMs = typeof created === 'string' ? Date.parse(created) : NaN;
++    if (id == null || !country || !product || Number.isNaN(createdMs)) {
++      // A row we can't read is a row we can't safely rule in OR out — fail the whole read.
++      throw new ProviderError({ kind: 'invalid_response', message: 'orders history row not understood' });
++    }
++    const operator = pick(row, 'Operator', 'operator');
++    out.push({
++      providerOrderId: String(id),
++      createdAtMs: createdMs,
++      country: String(country),
++      product: String(product),
++      operator: typeof operator === 'string' ? operator : null
++    });
++  }
++  return out;
++}
+diff --git a/src/modules/numbers/providers/fivesim/fivesim-provider.ts b/src/modules/numbers/providers/fivesim/fivesim-provider.ts
+index c28e3e9..d5f8129 100644
+--- a/src/modules/numbers/providers/fivesim/fivesim-provider.ts
++++ b/src/modules/numbers/providers/fivesim/fivesim-provider.ts
+@@ -7,30 +7,17 @@ import type {
+ } from '../activation-provider';
+ import * as fivesim from './client';
+ import type { FiveSimOrder } from './types';
++import { parseNairaPerUnit, toNaira } from '../../lib/naira';
+ 
+ /**
+- * 5sim's `price` field is a decimal major-unit number in 5sim's own
+- * accounting currency. This app stores everything in minor units
+- * ("cents") of your wallet's currency (NGN, given KORAPAY_DEFAULT_CURRENCY).
+- *
+- * If USD_NGN_RATE is set, this assumes 5sim's price is effectively in USD
+- * and converts: NGN kobo = price * USD_NGN_RATE * 100. That assumption
+- * needs verifying against a real 5sim invoice/receipt for your account —
+- * 5sim has historically priced in RUB for some accounts, so confirm which
+- * currency your account's `price` field is actually denominated in before
+- * trusting the profit numbers.
+- *
+- * If USD_NGN_RATE isn't set, falls back to FIVESIM_RATE_TO_WALLET_MINOR_UNITS
+- * ("how many wallet minor units equal 1 unit of 5sim's price field"),
+- * then to a 1:1 placeholder — set one of these or costs will be wrong.
++ * 5sim's `price` field is a decimal number in 5sim's own billing currency.
++ * Everything here is converted to WHOLE NAIRA with one explicit rate:
++ *   FIVESIM_NGN_PER_UNIT = naira per 1 unit of 5sim's price field.
++ * No guess is ever made: if it isn't set, listing and buying fail closed.
++ * Costs round UP to the next whole naira so a sale can never undercharge.
+  */
+-function toWalletCents(fivesimPrice: number): number {
+-  const usdToNgn = process.env.USD_NGN_RATE ? Number(process.env.USD_NGN_RATE) : null;
+-  if (usdToNgn) {
+-    return Math.round(fivesimPrice * usdToNgn * 100);
+-  }
+-  const rate = Number(process.env.FIVESIM_RATE_TO_WALLET_MINOR_UNITS ?? '100');
+-  return Math.round(fivesimPrice * rate);
++function toWalletNaira(fivesimPrice: number): number {
++  return toNaira(fivesimPrice, parseNairaPerUnit(process.env.FIVESIM_NGN_PER_UNIT));
+ }
+ 
+ function mapStatus(status: FiveSimOrder['status']): ActivationOrder['status'] {
+@@ -60,7 +47,7 @@ function mapOrder(order: FiveSimOrder): ActivationOrder {
+     product: order.product,
+     operator: order.operator,
+     country: order.country,
+-    costCents: toWalletCents(order.price),
++    costNaira: toWalletNaira(order.price),
+     status: mapStatus(order.status),
+     smsCode: latestSms?.code ?? null,
+     smsText: latestSms?.text ?? null,
+@@ -91,7 +78,7 @@ export class FiveSimProvider implements ActivationProvider {
+       .map(([product, entry]) => ({
+         product,
+         operator: 'any',
+-        costCents: toWalletCents(entry.Price),
++        costNaira: toWalletNaira(entry.Price),
+         quantity: entry.Qty
+       }));
+   }
+@@ -106,11 +93,11 @@ export class FiveSimProvider implements ActivationProvider {
+       .filter(([, entry]) => entry.count > 0)
+       .map(([operator, entry]) => ({
+         operator,
+-        costCents: toWalletCents(entry.cost),
++        costNaira: toWalletNaira(entry.cost),
+         successRate: entry.rate ?? null,
+         quantity: entry.count
+       }))
+-      .sort((a, b) => a.costCents - b.costCents);
++      .sort((a, b) => a.costNaira - b.costNaira);
+   }
+ 
+   async buyActivation(params: { country: string; operator: string; product: string }): Promise<ActivationOrder> {
+@@ -130,4 +117,8 @@ export class FiveSimProvider implements ActivationProvider {
+   async finishOrder(providerOrderId: string): Promise<void> {
+     await fivesim.finishOrder(providerOrderId);
+   }
++
++  async listRecentActivations(limit: number) {
++    return fivesim.listRecentActivations(limit);
++  }
+ }
+diff --git a/src/modules/numbers/providers/fivesim/types.ts b/src/modules/numbers/providers/fivesim/types.ts
+index b213197..2f9e1ab 100644
+--- a/src/modules/numbers/providers/fivesim/types.ts
++++ b/src/modules/numbers/providers/fivesim/types.ts
+@@ -49,3 +49,8 @@ export type FiveSimOrder = {
+   created_at: string;
+   country: string;
+ };
++
++// GET /user/orders?category=activation&limit=N&offset=0&order=id&reverse=true
++// Field casing has varied between 5sim doc versions, so the parser accepts both
++// (see client.ts). UNVERIFIED against a live account — confirm with one real call.
++export type FiveSimHistoryRow = Record<string, unknown>;
+diff --git a/src/modules/numbers/services/activation-service.ts b/src/modules/numbers/services/activation-service.ts
+index 0353c91..0e08d3f 100644
+--- a/src/modules/numbers/services/activation-service.ts
++++ b/src/modules/numbers/services/activation-service.ts
+@@ -1,23 +1,25 @@
+ import { createAdminClient, createClient } from '@/lib/supabase/server';
+-import { debitWallet, creditWallet } from '@/lib/payments/wallet';
+ import { getActivationProvider } from '../providers/activation-provider-manager';
+ import { getPricingRule, getPricingRuleAsAdmin, applyMarkup } from '@/lib/pricing/number-pricing';
+ import { recordInboundSms } from '@/modules/sms/services/sms-service';
+ import { sendSms, buildCodeReceivedMessage } from '@/lib/notifications/sms/brevo';
+ import type { ActivationOrder } from '../providers/activation-provider';
++import { reserveOrder, refundOrder } from './order-ledger';
++import { ProviderError, isDefiniteNonPurchase, customerMessageForRejection } from '../lib/provider-errors';
++import { reconcileBatch, type PurchasingOrder } from '../lib/reconcile';
+ 
+ type AdminClient = ReturnType<typeof createAdminClient>;
+ 
+ export type ProductQuote = {
+   product: string;
+   operator: string;
+-  priceCents: number; // what the customer pays (cost + markup)
++  priceNaira: number; // what the customer pays, whole naira (cost + markup)
+   quantity: number;
+ };
+ 
+ export type OfferQuote = {
+   operator: string;
+-  priceCents: number; // what the customer pays (cost + markup)
++  priceNaira: number; // what the customer pays, whole naira (cost + markup)
+   successRate: number | null;
+   quantity: number;
+ };
+@@ -41,13 +43,13 @@ export async function getProductCatalog(country: string): Promise<ProductQuote[]
+       return {
+         product: p.product,
+         operator: p.operator,
+-        priceCents: applyMarkup(p.costCents, pricing),
++        priceNaira: applyMarkup(p.costNaira, pricing),
+         quantity: p.quantity
+       };
+     })
+   );
+ 
+-  return priced.sort((a, b) => a.priceCents - b.priceCents);
++  return priced.sort((a, b) => a.priceNaira - b.priceNaira);
+ }
+ 
+ /**
+@@ -65,20 +67,43 @@ export async function getOfferCatalog(country: string, product: string): Promise
+   return offers
+     .map((o) => ({
+       operator: o.operator,
+-      priceCents: applyMarkup(o.costCents, pricing),
++      priceNaira: applyMarkup(o.costNaira, pricing),
+       successRate: o.successRate,
+       quantity: o.quantity
+     }))
+-    .sort((a, b) => a.priceCents - b.priceCents);
++    .sort((a, b) => a.priceNaira - b.priceNaira);
+ }
+ 
++/** The purchase is saved and charged, but we have not yet confirmed the number. Money is held, not lost. */
++export class PurchasePendingError extends Error {
++  readonly orderId: string;
++  constructor(orderId: string) {
++    super(
++      'Your purchase is being confirmed with our provider. Check My Orders in a minute: you will get your number, or an automatic refund.'
++    );
++    this.name = 'PurchasePendingError';
++    this.orderId = orderId;
++  }
++}
++
++const RECONCILE_MIN_AGE_MS = 45_000; // give the original request time to finish on its own
++const HISTORY_LIMIT = 100;
++const EXPIRY_GRACE_MS = 30_000;
++
+ /**
+- * Buys a number for one service (e.g. "telegram") and charges the
+- * customer's wallet. The wallet is debited at the *quoted* price before
+- * calling the provider; if the provider purchase fails, the debit is
+- * reversed. The provider's actual charged cost (which can differ
+- * slightly from the quote) is stored as cost_cents so profit reporting
+- * reflects reality, not the estimate.
++ * Buys a number for one service and charges the customer's wallet (whole naira).
++ *
++ * Order of operations, chosen so money can never be lost or created:
++ *   1. Re-quote from the provider (never trust a client-supplied price).
++ *   2. order_reserve(): ONE database transaction debits the wallet and creates
++ *      the order as 'purchasing'. There is never a charge without an order row.
++ *   3. Call the provider ONCE (no automatic retry) with a timeout.
++ *   4a. Success            -> record the number, status 'awaiting_sms'.
++ *   4b. Clear refusal (4xx)-> nothing was bought: refund exactly once.
++ *   4c. Anything uncertain (timeout, dropped connection, 5xx, unreadable reply,
++ *       or a database hiccup while saving) -> leave the order 'purchasing'.
++ *       The poller later checks the provider's own history and either adopts
++ *       the number or refunds on positive proof it was never bought.
+  */
+ export async function purchaseActivationNumber({
+   userId,
+@@ -93,10 +118,6 @@ export async function purchaseActivationNumber({
+ }) {
+   const provider = getActivationProvider();
+ 
+-  // Re-quote right before charging rather than trusting a client-supplied
+-  // price — matched against the specific operator pool the customer picked
+-  // (offers at different operators can have very different prices for the
+-  // same product), not just "some price for this product".
+   const offers = await provider.listOffers({ country, product });
+   const match = offers.find((o) => o.operator === operator) ?? offers[0];
+   if (!match || match.quantity < 1) {
+@@ -104,119 +125,144 @@ export async function purchaseActivationNumber({
+   }
+ 
+   const pricing = await getPricingRuleAsAdmin(product);
+-  const quotedPriceCents = applyMarkup(match.costCents, pricing);
++  const priceNaira = applyMarkup(match.costNaira, pricing);
+ 
+-  // One id ties the debit to its refund, so a retried failure path can never refund twice.
+-  const purchaseRef = crypto.randomUUID();
+-
+-  await debitWallet({
++  const { orderId } = await reserveOrder({
+     userId,
+-    amountCents: quotedPriceCents,
+-    reason: 'number_purchase',
+-    referenceType: 'number_purchase',
+-    referenceId: purchaseRef,
+-    idempotencyKey: `purchase:${purchaseRef}`
++    priceNaira,
++    provider: provider.name,
++    country,
++    operator: match.operator,
++    product
+   });
+ 
+   const admin = createAdminClient();
+ 
++  let bought: ActivationOrder;
+   try {
+-    const order = await provider.buyActivation({ country, operator: match.operator, product });
++    bought = await provider.buyActivation({ country, operator: match.operator, product });
++  } catch (err) {
++    if (err instanceof ProviderError && isDefiniteNonPurchase(err.failure)) {
++      await refundOrder(orderId, 'failed', 'number_purchase_refund');
++      throw new Error(customerMessageForRejection(err.failure));
++    }
++    // Uncertain: a number may exist upstream. Keep the money held; the poller settles it.
++    console.error('purchase uncertain', orderId, err instanceof Error ? err.message : err);
++    throw new PurchasePendingError(orderId);
++  }
+ 
+-    const expiresAt =
+-      order.expiresAt ??
+-      new Date(Date.now() + Number(process.env.ORDER_TIMEOUT_SECONDS ?? '600') * 1000).toISOString();
++  const expiresAt =
++    bought.expiresAt ??
++    new Date(Date.now() + Number(process.env.ORDER_TIMEOUT_SECONDS ?? '600') * 1000).toISOString();
+ 
+-    const { data: row, error } = await admin
+-      .from('number_orders')
+-      .insert({
+-        user_id: userId,
+-        provider: provider.name,
+-        provider_order_id: order.providerOrderId,
+-        phone_number: order.phoneNumber,
+-        country,
+-        operator: order.operator,
+-        product: order.product,
+-        status: order.status,
+-        price_cents: quotedPriceCents,
+-        cost_cents: order.costCents,
+-        expires_at: expiresAt,
+-        last_checked_at: new Date().toISOString()
+-      })
+-      .select()
+-      .single();
+-
+-    if (error) throw error;
+-
+-    // Wallet debit above already used quotedPriceCents as both charge and
+-    // (via cost_cents on the row) the profit baseline — no second debit needed.
+-    return row;
+-  } catch (err) {
+-    // KNOWN RISK (to be replaced by the reserve/reconcile state machine): if the provider call
+-    // timed out, a number may exist upstream. This refund is at least now idempotent.
+-    await creditWallet({
+-      userId,
+-      amountCents: quotedPriceCents,
+-      reason: 'number_purchase_refund',
+-      referenceType: 'number_purchase',
+-      referenceId: purchaseRef,
+-      idempotencyKey: `purchase_refund:${purchaseRef}`
+-    });
+-    throw err;
++  const { data: row, error } = await admin
++    .from('number_orders')
++    .update({
++      provider_order_id: bought.providerOrderId,
++      phone_number: bought.phoneNumber,
++      operator: bought.operator,
++      product: bought.product,
++      // Once we hold the provider's order id the order is no longer "unconfirmed".
++      // The poller's next check records the true state (code / cancelled / expired).
++      status: 'awaiting_sms',
++      cost_cents: bought.costNaira,
++      expires_at: expiresAt,
++      last_checked_at: new Date().toISOString(),
++      updated_at: new Date().toISOString()
++    })
++    .eq('id', orderId)
++    .eq('status', 'purchasing')
++    .select()
++    .single();
++
++  if (error || !row) {
++    // The provider DID sell us a number but we couldn't save it. Never refund here:
++    // the poller will find it in the provider's history and adopt it.
++    console.error('purchase saved-failed', orderId, bought.providerOrderId, error?.message);
++    throw new PurchasePendingError(orderId);
+   }
++
++  return row;
+ }
+ 
++type OrderRow = {
++  id: string;
++  user_id: string;
++  status: string;
++  product: string | null;
++  phone_number: string | null;
++  price_cents: number;
++  provider_order_id?: string | null;
++};
++
+ /**
+- * Shared by the single-order check (customer clicks "Check for code") and
+- * the bulk poller (cron hitting every pending order). Applies a provider
+- * result to the DB row: updates status, records a newly-arrived code, and
+- * fires the Brevo alert — exactly once per code, regardless of which path
+- * triggered the check.
++ * Applies one provider result to an order, exactly once per outcome, no matter
++ * whether the customer's "Check" button or the poller got here first.
++ *
++ *  - code arrived         -> status moves with a conditional update; only the
++ *                            caller that wins the move records the SMS/alert
++ *  - cancelled/expired/
++ *    banned, no code      -> refund via order_refund (exactly once)
++ *  - still waiting        -> just stamp last_checked_at
+  */
+-async function applyCheckResult(
+-  admin: AdminClient,
+-  order: { id: string; user_id: string; status: string; product: string | null; phone_number: string | null },
+-  result: ActivationOrder
+-) {
+-  const wasAlreadyReceived = order.status === 'received' || order.status === 'finished';
++async function applyCheckResult(admin: AdminClient, order: OrderRow, result: ActivationOrder) {
++  const now = new Date().toISOString();
+ 
+-  await admin
+-    .from('number_orders')
+-    .update({ status: result.status, last_checked_at: new Date().toISOString() })
+-    .eq('id', order.id);
+-
+-  if (result.status === 'received' && !wasAlreadyReceived && result.smsCode) {
+-    await recordInboundSms({
+-      numberOrderId: order.id,
+-      fromNumber: order.product ?? 'unknown',
+-      body: result.smsText ?? result.smsCode,
+-      receivedAt: new Date().toISOString()
+-    });
+-
+-    const { data: profile } = await admin
+-      .from('profiles')
+-      .select('notify_phone_number')
+-      .eq('id', order.user_id)
+-      .single();
+-
+-    if (profile?.notify_phone_number) {
+-      await sendSms({
+-        to: profile.notify_phone_number,
+-        content: buildCodeReceivedMessage({
+-          phoneNumber: order.phone_number ?? '',
+-          product: order.product ?? 'service',
+-          code: result.smsCode,
+-          text: result.smsText
+-        })
++  if (result.status === 'received' || result.status === 'finished') {
++    const { data: moved } = await admin
++      .from('number_orders')
++      .update({ status: result.status, last_checked_at: now, updated_at: now })
++      .eq('id', order.id)
++      .in('status', ['awaiting_sms', 'purchasing', 'needs_review'])
++      .select('id');
++
++    const wonTheMove = (moved?.length ?? 0) > 0;
++    if (wonTheMove && result.smsCode) {
++      await recordInboundSms({
++        numberOrderId: order.id,
++        fromNumber: order.product ?? 'unknown',
++        body: result.smsText ?? result.smsCode,
++        receivedAt: now
+       });
++
++      const { data: profile } = await admin
++        .from('profiles')
++        .select('notify_phone_number')
++        .eq('id', order.user_id)
++        .single();
++
++      if (profile?.notify_phone_number) {
++        await sendSms({
++          to: profile.notify_phone_number,
++          content: buildCodeReceivedMessage({
++            phoneNumber: order.phone_number ?? '',
++            product: order.product ?? 'service',
++            code: result.smsCode,
++            text: result.smsText
++          })
++        });
++      }
++    } else if (wonTheMove && !result.smsCode) {
++      console.error('order marked received without a code', order.id);
+     }
++    return;
++  }
++
++  if (result.status === 'cancelled' || result.status === 'expired' || result.status === 'failed') {
++    // Provider says the order is over and no code was delivered: give the money back, once.
++    await refundOrder(order.id, result.status, `number_${result.status}_refund`);
++    return;
+   }
++
++  await admin
++    .from('number_orders')
++    .update({ last_checked_at: now })
++    .eq('id', order.id)
++    .eq('status', 'awaiting_sms');
+ }
+ 
+ /**
+- * Polls the provider for a code. If a code has newly arrived, records it
+- * in sms_messages, updates the order, and fires a Brevo SMS to the
+- * customer's notify_phone_number if they've set one.
++ * Customer clicks "Check for code". Same logic as the poller.
+  */
+ export async function checkActivationOrder({ userId, orderId }: { userId: string; orderId: string }) {
+   const admin = createAdminClient();
+@@ -229,6 +275,9 @@ export async function checkActivationOrder({ userId, orderId }: { userId: string
+     .single();
+ 
+   if (error || !order) throw new Error('Order not found');
++  if (order.status === 'purchasing') {
++    return { ...order, smsCode: null, smsText: null };
++  }
+   if (!order.provider_order_id) throw new Error('This order has no provider reference to check');
+ 
+   const provider = getActivationProvider();
+@@ -240,25 +289,129 @@ export async function checkActivationOrder({ userId, orderId }: { userId: string
+ }
+ 
+ /**
+- * Bulk version for the cron poller: checks every order still awaiting a
+- * code (skipping ones already past their provider expiry — those are
+- * marked expired without spending a provider call), across every user.
++ * Settles orders stuck in 'purchasing' by comparing them with the provider's
++ * own purchase history. See ../lib/reconcile.ts for the exact rules. Refunds
++ * only on positive proof of absence; anything ambiguous is held for review.
++ */
++async function reconcilePurchasing(admin: AdminClient) {
++  const cutoff = new Date(Date.now() - RECONCILE_MIN_AGE_MS).toISOString();
++  const { data: stuck, error } = await admin
++    .from('number_orders')
++    .select('id, country, product, operator, purchase_started_at, provider')
++    .eq('status', 'purchasing')
++    .is('provider_order_id', null) // an order we already hold a provider id for is never "unconfirmed"
++    .lt('purchase_started_at', cutoff)
++    .order('purchase_started_at', { ascending: true })
++    .limit(20);
++
++  if (error) throw error;
++  if (!stuck || stuck.length === 0) return { adopted: 0, refunded: 0, review: 0 };
++
++  const provider = getActivationProvider();
++  const orders: PurchasingOrder[] = stuck
++    .filter((o) => o.provider === provider.name && o.country && o.product && o.purchase_started_at)
++    .map((o) => ({
++      id: o.id,
++      country: o.country as string,
++      product: o.product as string,
++      operator: o.operator ?? 'any',
++      startedAtMs: Date.parse(o.purchase_started_at as string)
++    }));
++  if (orders.length === 0) return { adopted: 0, refunded: 0, review: 0 };
++
++  let upstream: Awaited<ReturnType<typeof provider.listRecentActivations>> = [];
++  let historyFetchedOk = true;
++  try {
++    upstream = await provider.listRecentActivations(HISTORY_LIMIT);
++  } catch (err) {
++    console.error('reconcile: could not read provider history', err instanceof Error ? err.message : err);
++    historyFetchedOk = false;
++  }
++
++  const ids = upstream.map((u) => u.providerOrderId);
++  const claimed = new Set<string>();
++  if (ids.length > 0) {
++    const { data: taken } = await admin
++      .from('number_orders')
++      .select('provider_order_id')
++      .eq('provider', provider.name)
++      .in('provider_order_id', ids);
++    for (const t of taken ?? []) if (t.provider_order_id) claimed.add(t.provider_order_id);
++  }
++
++  const earliest = Math.min(...orders.map((o) => o.startedAtMs));
++  const oldestListed = upstream.length > 0 ? Math.min(...upstream.map((u) => u.createdAtMs)) : Infinity;
++  const historyCoversWindow = upstream.length < HISTORY_LIMIT || oldestListed <= earliest - 60_000;
++
++  const decisions = reconcileBatch({
++    orders,
++    upstream,
++    claimedProviderIds: claimed,
++    historyFetchedOk,
++    historyCoversWindow,
++    nowMs: Date.now()
++  });
++
++  let adopted = 0;
++  let refunded = 0;
++  let review = 0;
++  const now = new Date().toISOString();
++
++  for (const [orderId, decision] of decisions) {
++    try {
++      if (decision.action === 'adopt') {
++        // Re-read the real order so we store its true phone/expiry/status.
++        const real = await provider.checkOrder(decision.upstream.providerOrderId);
++        const { error: upErr } = await admin
++          .from('number_orders')
++          .update({
++            provider_order_id: real.providerOrderId,
++            phone_number: real.phoneNumber,
++            operator: real.operator,
++            cost_cents: real.costNaira,
++            status: 'awaiting_sms',
++            expires_at: real.expiresAt,
++            last_checked_at: now,
++            review_note: 'Adopted by reconciliation after an unconfirmed purchase.',
++            updated_at: now
++          })
++          .eq('id', orderId)
++          .eq('status', 'purchasing');
++        if (upErr) throw upErr;
++        adopted += 1;
++      } else if (decision.action === 'refund') {
++        const r = await refundOrder(orderId, 'failed', 'number_purchase_refund');
++        if (r.outcome === 'refunded') refunded += 1;
++      } else if (decision.action === 'review') {
++        await admin
++          .from('number_orders')
++          .update({ status: 'needs_review', review_note: decision.note, updated_at: now })
++          .eq('id', orderId)
++          .eq('status', 'purchasing');
++        review += 1;
++      }
++    } catch (err) {
++      console.error('reconcile step failed', orderId, err instanceof Error ? err.message : err);
++    }
++  }
++
++  return { adopted, refunded, review };
++}
++
++/**
++ * Background job (Cloudflare Cron, every minute):
++ *   1. settle unconfirmed purchases
++ *   2. check every order waiting for a code
++ *   3. for orders past their window: confirm with the provider, then refund once
+  *
+- * Kept deliberately simple: sequential, capped batch size. A busier
+- * platform would want a queue and concurrency limits instead of a single
+- * cron invocation walking the whole table.
++ * A refund only ever follows the PROVIDER confirming the order is over (or the
++ * customer cancelling). A merely stale local clock never refunds anyone.
+  */
+-export async function pollAllPendingOrders({ batchSize = 50 }: { batchSize?: number } = {}) {
++export async function pollAllPendingOrders({ batchSize = 15 }: { batchSize?: number } = {}) {
+   const admin = createAdminClient();
+-  const now = new Date().toISOString();
++  const provider = getActivationProvider();
+ 
+-  // Expire anything past its window without wasting a provider call on it.
+-  const { data: expired } = await admin
+-    .from('number_orders')
+-    .update({ status: 'expired' })
+-    .eq('status', 'awaiting_sms')
+-    .lt('expires_at', now)
+-    .select('id');
++  const reconciled = await reconcilePurchasing(admin);
+ 
+   const { data: pending, error } = await admin
+     .from('number_orders')
+@@ -269,32 +422,50 @@ export async function pollAllPendingOrders({ batchSize = 50 }: { batchSize?: num
+ 
+   if (error) throw error;
+ 
+-  const provider = getActivationProvider();
+   let checked = 0;
+   let codesFound = 0;
++  let refunded = 0;
+   const errors: string[] = [];
+ 
+   for (const order of pending ?? []) {
+-    if (!order.provider_order_id) continue;
++    if (!order.provider_order_id) {
++      await admin
++        .from('number_orders')
++        .update({ status: 'needs_review', review_note: 'Awaiting code but has no provider order id.' })
++        .eq('id', order.id)
++        .eq('status', 'awaiting_sms');
++      continue;
++    }
++
+     try {
+-      const result = await provider.checkOrder(order.provider_order_id);
++      let result = await provider.checkOrder(order.provider_order_id);
++
++      const pastWindow =
++        order.expires_at !== null && Date.parse(order.expires_at) + EXPIRY_GRACE_MS < Date.now();
++
++      if (result.status === 'awaiting_sms' && pastWindow) {
++        // Window closed with no code: ask the provider to close it, then trust ITS answer.
++        try {
++          await provider.cancelOrder(order.provider_order_id);
++        } catch (err) {
++          errors.push(`${order.id}: cancel after expiry failed (${err instanceof Error ? err.message : 'unknown'})`);
++        }
++        result = await provider.checkOrder(order.provider_order_id);
++      }
++
+       await applyCheckResult(admin, order, result);
+       checked += 1;
+       if (result.status === 'received') codesFound += 1;
++      if (result.status === 'cancelled' || result.status === 'expired' || result.status === 'failed') refunded += 1;
+     } catch (err) {
+       errors.push(`${order.id}: ${err instanceof Error ? err.message : 'unknown error'}`);
+     }
+   }
+ 
+-  return {
+-    expiredCount: expired?.length ?? 0,
+-    checked,
+-    codesFound,
+-    errors
+-  };
++  return { reconciled, checked, codesFound, refundedOrExpired: refunded, errors };
+ }
+ 
+-/** Cancels an order and refunds the customer if no code was ever received. */
++/** Cancels an order and refunds the customer (exactly once) if no code was ever received. */
+ export async function cancelActivationOrder({ userId, orderId }: { userId: string; orderId: string }) {
+   const admin = createAdminClient();
+ 
+@@ -309,8 +480,11 @@ export async function cancelActivationOrder({ userId, orderId }: { userId: strin
+   if (order.status === 'received' || order.status === 'finished') {
+     throw new Error('Cannot cancel — a code was already delivered for this number.');
+   }
+-  if (order.status === 'cancelled') {
+-    return { refundedCents: 0 }; // already cancelled (and refunded) — never refund twice
++  if (order.status === 'purchasing' || order.status === 'needs_review') {
++    throw new Error('This order is still being confirmed. Please wait a minute; if it fails you are refunded automatically.');
++  }
++  if (order.refunded_at) {
++    return { refundedNaira: 0 }; // already refunded — never twice
+   }
+ 
+   const provider = getActivationProvider();
+@@ -318,18 +492,8 @@ export async function cancelActivationOrder({ userId, orderId }: { userId: strin
+     await provider.cancelOrder(order.provider_order_id);
+   }
+ 
+-  await admin.from('number_orders').update({ status: 'cancelled' }).eq('id', order.id);
+-
+-  await creditWallet({
+-    userId,
+-    amountCents: order.price_cents,
+-    reason: 'number_cancel_refund',
+-    referenceType: 'number_orders',
+-    referenceId: order.id,
+-    idempotencyKey: `cancel_refund:${order.id}`
+-  });
+-
+-  return { refundedCents: order.price_cents };
++  const r = await refundOrder(order.id, 'cancelled', 'number_cancel_refund');
++  return { refundedNaira: r.outcome === 'refunded' ? r.refundedNaira : 0 };
+ }
+ 
+ export async function listActivationOrdersForUser(userId: string) {
+diff --git a/src/modules/numbers/services/order-ledger.ts b/src/modules/numbers/services/order-ledger.ts
+new file mode 100644
+index 0000000..34ce5f7
+--- /dev/null
++++ b/src/modules/numbers/services/order-ledger.ts
+@@ -0,0 +1,57 @@
++import { createAdminClient } from '@/lib/supabase/server';
++import { InsufficientFundsError } from '@/lib/payments/wallet';
++
++/**
++ * Thin wrappers over the two Postgres functions in migration 0012. All money
++ * here is whole naira. Server-only (service role).
++ *
++ * order_reserve: debits the wallet AND creates the order in one transaction.
++ * order_refund : refunds an order exactly once, however often it is called.
++ */
++
++export type RefundOutcome = 'refunded' | 'already_refunded' | 'not_refundable' | 'not_found';
++export type RefundFinalStatus = 'cancelled' | 'expired' | 'failed';
++
++export async function reserveOrder(args: {
++  userId: string;
++  priceNaira: number;
++  provider: string;
++  country: string;
++  operator: string;
++  product: string;
++}): Promise<{ orderId: string; newBalanceNaira: number }> {
++  const admin = createAdminClient();
++  const { data, error } = await admin.rpc('order_reserve', {
++    p_user: args.userId,
++    p_price: args.priceNaira,
++    p_provider: args.provider,
++    p_country: args.country,
++    p_operator: args.operator,
++    p_product: args.product
++  });
++
++  if (error) {
++    if (error.message.includes('INSUFFICIENT_FUNDS')) throw new InsufficientFundsError();
++    throw new Error(`Could not reserve order: ${error.message}`);
++  }
++  const row = Array.isArray(data) ? data[0] : data;
++  if (!row) throw new Error('Could not reserve order: empty result');
++  return { orderId: String(row.order_id), newBalanceNaira: Number(row.new_balance) };
++}
++
++export async function refundOrder(
++  orderId: string,
++  finalStatus: RefundFinalStatus,
++  reason: string
++): Promise<{ outcome: RefundOutcome; refundedNaira: number }> {
++  const admin = createAdminClient();
++  const { data, error } = await admin.rpc('order_refund', {
++    p_order: orderId,
++    p_final_status: finalStatus,
++    p_reason: reason
++  });
++  if (error) throw new Error(`Refund failed: ${error.message}`);
++  const row = Array.isArray(data) ? data[0] : data;
++  if (!row) throw new Error('Refund returned no result');
++  return { outcome: row.outcome as RefundOutcome, refundedNaira: Number(row.refunded) };
++}
+diff --git a/supabase/diagnostics/test_order_functions.sql b/supabase/diagnostics/test_order_functions.sql
+new file mode 100644
+index 0000000..62e5b8b
+--- /dev/null
++++ b/supabase/diagnostics/test_order_functions.sql
+@@ -0,0 +1,62 @@
++-- =========================================================
++-- Proves order_reserve / order_refund behave, on your REAL database, with ZERO
++-- lasting effect: everything runs inside a transaction that is ROLLED BACK.
++-- Run in the Supabase SQL editor AFTER 0012. The result table must show PASS on every row.
++-- Replace nothing: it picks any existing profile as the guinea pig.
++-- =========================================================
++begin;
++
++create temp table _t (step text, result text) on commit drop;
++
++do $$
++declare
++  u uuid;
++  bal0 bigint; bal1 bigint; bal2 bigint; bal3 bigint;
++  oid uuid;
++  r record;
++  n int;
++begin
++  select id into u from public.profiles order by created_at limit 1;
++  if u is null then raise exception 'no profile to test with'; end if;
++
++  select wallet_balance_cents into bal0 from public.profiles where id = u;
++  perform public.wallet_apply(u, 'credit', 1000, 'TEST_credit', null, null, 'TEST:' || u::text);
++
++  -- 1. reserve debits and creates the order together
++  select * into r from public.order_reserve(u, 300, '5sim', 'nigeria', 'any', 'telegram');
++  oid := r.order_id;
++  select wallet_balance_cents into bal1 from public.profiles where id = u;
++  insert into _t values ('reserve debited 300 and created order', case when bal1 = bal0 + 1000 - 300 then 'PASS' else 'FAIL' end);
++  select count(*) into n from public.number_orders where id = oid and status = 'purchasing' and price_cents = 300;
++  insert into _t values ('order exists as purchasing', case when n = 1 then 'PASS' else 'FAIL' end);
++
++  -- 2. refund once credits back
++  select * into r from public.order_refund(oid, 'failed', 'TEST_refund');
++  select wallet_balance_cents into bal2 from public.profiles where id = u;
++  insert into _t values ('first refund = refunded', case when r.outcome = 'refunded' and r.refunded = 300 and bal2 = bal0 + 1000 then 'PASS' else 'FAIL' end);
++
++  -- 3. refund again (and again) does nothing
++  perform public.order_refund(oid, 'expired', 'TEST_refund');
++  select * into r from public.order_refund(oid, 'cancelled', 'TEST_refund');
++  select wallet_balance_cents into bal3 from public.profiles where id = u;
++  insert into _t values ('repeat refunds are no-ops', case when r.outcome = 'already_refunded' and bal3 = bal2 then 'PASS' else 'FAIL' end);
++
++  -- 4. a delivered code is never refunded
++  select * into r from public.order_reserve(u, 200, '5sim', 'nigeria', 'any', 'telegram');
++  update public.number_orders set status = 'received' where id = r.order_id;
++  select * into r from public.order_refund(r.order_id, 'cancelled', 'TEST_refund');
++  insert into _t values ('received order not refundable', case when r.outcome = 'not_refundable' then 'PASS' else 'FAIL' end);
++
++  -- 5. insufficient funds blocks the order entirely (no order row, no debit)
++  begin
++    perform public.order_reserve(u, 999999999, '5sim', 'nigeria', 'any', 'telegram');
++    insert into _t values ('oversized reserve refused', 'FAIL - it should have been refused');
++  exception when others then
++    insert into _t values ('oversized reserve refused', case when sqlerrm like '%INSUFFICIENT_FUNDS%' then 'PASS' else 'FAIL: ' || sqlerrm end);
++  end;
++end $$;
++
++-- Read the results BEFORE rolling back. Every row must say PASS.
++select * from _t;
++
++rollback;  -- nothing above is kept
+diff --git a/supabase/migrations/0012_order_state_machine.sql b/supabase/migrations/0012_order_state_machine.sql
+new file mode 100644
+index 0000000..ac5c689
+--- /dev/null
++++ b/supabase/migrations/0012_order_state_machine.sql
+@@ -0,0 +1,139 @@
++-- =========================================================
++-- MIGRATION 0012 — number order state machine (money-safe purchases)
++--
++-- Run AFTER 0010 and 0011. Additive: no existing rows are changed.
++-- All money stays in whole NAIRA (the *_cents column names are legacy only).
++--
++-- What this adds:
++--   * new order states: 'purchasing' (wallet already debited, provider call
++--     in flight or outcome unknown) and 'needs_review' (needs a human)
++--   * order_reserve(): debit the wallet AND create the order row in ONE
++--     transaction, so a charge can never exist without an order row
++--   * order_refund():  refund an order EXACTLY ONCE, however many times the
++--     poller, the customer, or a retry calls it
++--
++-- ROLLBACK (only if no 'purchasing'/'needs_review' orders exist):
++--   drop function public.order_reserve(uuid, bigint, text, text, text, text);
++--   drop function public.order_refund(uuid, text, text);
++-- =========================================================
++
++-- 1. Allow the two new statuses (drop whatever status check exists, by definition).
++do $$
++declare c text;
++begin
++  for c in
++    select conname from pg_constraint
++    where conrelid = 'public.number_orders'::regclass
++      and contype = 'c'
++      and pg_get_constraintdef(oid) ilike '%status%'
++  loop
++    execute format('alter table public.number_orders drop constraint %I', c);
++  end loop;
++end $$;
++
++alter table public.number_orders
++  add constraint number_orders_status_check check (
++    status in ('purchasing', 'awaiting_sms', 'received', 'active', 'finished',
++               'cancelled', 'expired', 'failed', 'needs_review')
++  );
++
++alter table public.number_orders
++  add column if not exists purchase_started_at timestamptz,
++  add column if not exists refunded_at timestamptz,
++  add column if not exists review_note text;
++
++-- The poller scans these two states constantly.
++create index if not exists number_orders_purchasing_idx
++  on public.number_orders (purchase_started_at)
++  where status = 'purchasing';
++
++-- 2. order_reserve: charge + create the order atomically.
++create or replace function public.order_reserve(
++  p_user     uuid,
++  p_price    bigint,
++  p_provider text,
++  p_country  text,
++  p_operator text,
++  p_product  text
++)
++returns table (order_id uuid, new_balance bigint)
++language plpgsql
++security definer
++set search_path = public
++as $$
++declare
++  v_id  uuid := gen_random_uuid();
++  v_bal bigint;
++begin
++  if p_price is null or p_price <= 0 then
++    raise exception 'INVALID_AMOUNT';
++  end if;
++
++  -- Raises INSUFFICIENT_FUNDS / WALLET_NOT_FOUND; the ledger row points at the order id.
++  select w.new_balance into v_bal
++  from public.wallet_apply(p_user, 'debit', p_price, 'number_purchase',
++                           'number_orders', v_id, 'purchase:' || v_id::text) w;
++
++  insert into public.number_orders
++    (id, user_id, provider, country, operator, product, status,
++     price_cents, cost_cents, purchase_started_at)
++  values
++    (v_id, p_user, p_provider, p_country, p_operator, p_product, 'purchasing',
++     p_price, 0, now());
++
++  return query select v_id, v_bal;
++end;
++$$;
++
++-- 3. order_refund: refund once, set the final status in the same transaction.
++--    Outcomes: refunded | already_refunded | not_refundable | not_found
++create or replace function public.order_refund(
++  p_order        uuid,
++  p_final_status text,
++  p_reason       text
++)
++returns table (outcome text, refunded bigint)
++language plpgsql
++security definer
++set search_path = public
++as $$
++declare
++  o public.number_orders%rowtype;
++begin
++  if p_final_status not in ('cancelled', 'expired', 'failed') then
++    raise exception 'INVALID_STATUS';
++  end if;
++
++  select * into o from public.number_orders where id = p_order for update;
++  if not found then
++    return query select 'not_found'::text, 0::bigint;
++    return;
++  end if;
++
++  if o.refunded_at is not null then
++    return query select 'already_refunded'::text, 0::bigint;
++    return;
++  end if;
++
++  -- A delivered code is never refunded.
++  if o.status in ('received', 'finished') then
++    return query select 'not_refundable'::text, 0::bigint;
++    return;
++  end if;
++
++  -- Belt and braces: the idempotency key also stops a double credit.
++  perform public.wallet_apply(o.user_id, 'credit', o.price_cents, p_reason,
++                              'number_orders', o.id, 'order_refund:' || o.id::text);
++
++  update public.number_orders
++     set status = p_final_status, refunded_at = now(), updated_at = now()
++   where id = o.id;
++
++  return query select 'refunded'::text, o.price_cents;
++end;
++$$;
++
++revoke execute on function public.order_reserve(uuid, bigint, text, text, text, text) from public, anon, authenticated;
++revoke execute on function public.order_refund(uuid, text, text) from public, anon, authenticated;
++grant  execute on function public.order_reserve(uuid, bigint, text, text, text, text) to service_role;
++grant  execute on function public.order_refund(uuid, text, text) to service_role;
+diff --git a/tests/naira.test.ts b/tests/naira.test.ts
+new file mode 100644
+index 0000000..4f68642
+--- /dev/null
++++ b/tests/naira.test.ts
+@@ -0,0 +1,31 @@
++import { describe, expect, it } from 'vitest';
++import { parseNairaPerUnit, toNaira, PricingConfigError } from '../src/modules/numbers/lib/naira';
++
++describe('parseNairaPerUnit', () => {
++  it('fails closed when the rate is missing, empty, zero, negative or not a number', () => {
++    for (const bad of [undefined, null, '', '0', '-5', 'abc', 'NaN', 'Infinity']) {
++      expect(() => parseNairaPerUnit(bad as string | undefined)).toThrow(PricingConfigError);
++    }
++  });
++  it('accepts a positive number', () => {
++    expect(parseNairaPerUnit('18.5')).toBe(18.5);
++  });
++});
++
++describe('toNaira', () => {
++  it('rounds UP to whole naira so we never undercharge', () => {
++    expect(toNaira(1.6, 18.5)).toBe(30); // 29.6 -> 30
++    expect(toNaira(2, 18.5)).toBe(37);
++    expect(toNaira(0.001, 18.5)).toBe(1); // never zero for a real price
++  });
++  it('does not add a naira because of float noise', () => {
++    expect(toNaira(0.1, 30)).toBe(3); // 0.1*30 = 3.0000000000000004 in floats
++  });
++  it('rejects invalid provider prices', () => {
++    expect(() => toNaira(-1, 18)).toThrow(PricingConfigError);
++    expect(() => toNaira(Number.NaN, 18)).toThrow(PricingConfigError);
++  });
++  it('a free price stays free', () => {
++    expect(toNaira(0, 18)).toBe(0);
++  });
++});
+diff --git a/tests/provider-errors.test.ts b/tests/provider-errors.test.ts
+new file mode 100644
+index 0000000..f6b9b55
+--- /dev/null
++++ b/tests/provider-errors.test.ts
+@@ -0,0 +1,29 @@
++import { describe, expect, it } from 'vitest';
++import { isDefiniteNonPurchase, customerMessageForRejection } from '../src/modules/numbers/lib/provider-errors';
++
++describe('isDefiniteNonPurchase: only a clear refusal makes a refund safe', () => {
++  it('4xx refusals are definite', () => {
++    for (const status of [400, 401, 402, 403, 404, 429]) {
++      expect(isDefiniteNonPurchase({ kind: 'http', status, body: '' })).toBe(true);
++    }
++  });
++  it('timeouts, dropped connections, 5xx and unreadable replies are UNCERTAIN', () => {
++    expect(isDefiniteNonPurchase({ kind: 'timeout' })).toBe(false);
++    expect(isDefiniteNonPurchase({ kind: 'network', message: 'reset' })).toBe(false);
++    for (const status of [500, 502, 503, 504, 520]) {
++      expect(isDefiniteNonPurchase({ kind: 'http', status, body: '' })).toBe(false);
++    }
++    expect(isDefiniteNonPurchase({ kind: 'invalid_response', message: 'x' })).toBe(false);
++  });
++});
++
++describe('customerMessageForRejection', () => {
++  it('never leaks the raw provider body', () => {
++    const msg = customerMessageForRejection({ kind: 'http', status: 400, body: 'not enough user balance SECRET-DETAIL' });
++    expect(msg).not.toContain('SECRET-DETAIL');
++    expect(msg).toContain('not been charged');
++  });
++  it('explains out-of-stock', () => {
++    expect(customerMessageForRejection({ kind: 'http', status: 400, body: 'no free phones' })).toContain('No numbers');
++  });
++});
+diff --git a/tests/reconcile.test.ts b/tests/reconcile.test.ts
+new file mode 100644
+index 0000000..1c5a25b
+--- /dev/null
++++ b/tests/reconcile.test.ts
+@@ -0,0 +1,70 @@
++import { describe, expect, it } from 'vitest';
++import {
++  reconcileBatch,
++  ABSENCE_WAIT_MS,
++  type PurchasingOrder,
++  type UpstreamActivation
++} from '../src/modules/numbers/lib/reconcile';
++
++const T0 = 1_700_000_000_000;
++const order = (id: string, over: Partial<PurchasingOrder> = {}): PurchasingOrder => ({
++  id, country: 'nigeria', product: 'telegram', operator: 'any', startedAtMs: T0, ...over
++});
++const up = (id: string, over: Partial<UpstreamActivation> = {}): UpstreamActivation => ({
++  providerOrderId: id, createdAtMs: T0 + 5_000, country: 'nigeria', product: 'telegram', operator: null, ...over
++});
++const base = { claimedProviderIds: new Set<string>(), historyFetchedOk: true, historyCoversWindow: true };
++
++describe('reconcileBatch', () => {
++  it('adopts when exactly one upstream order matches exactly one of ours', () => {
++    const r = reconcileBatch({ ...base, orders: [order('a')], upstream: [up('u1')], nowMs: T0 + 60_000 });
++    expect(r.get('a')).toEqual({ action: 'adopt', upstream: up('u1') });
++  });
++
++  it('never refunds when the history could not be read', () => {
++    const r = reconcileBatch({ ...base, historyFetchedOk: false, orders: [order('a')], upstream: [], nowMs: T0 + 99 * 60_000 });
++    expect(r.get('a')).toEqual({ action: 'wait' });
++  });
++
++  it('never refunds when the history does not cover the purchase window', () => {
++    const r = reconcileBatch({ ...base, historyCoversWindow: false, orders: [order('a')], upstream: [], nowMs: T0 + 99 * 60_000 });
++    expect(r.get('a')).toEqual({ action: 'wait' });
++  });
++
++  it('waits before trusting an empty history, then refunds on proof of absence', () => {
++    const early = reconcileBatch({ ...base, orders: [order('a')], upstream: [], nowMs: T0 + ABSENCE_WAIT_MS - 1 });
++    expect(early.get('a')).toEqual({ action: 'wait' });
++    const late = reconcileBatch({ ...base, orders: [order('a')], upstream: [], nowMs: T0 + ABSENCE_WAIT_MS });
++    expect(late.get('a')).toEqual({ action: 'refund' });
++  });
++
++  it('ignores upstream orders already attached to another of our orders', () => {
++    const r = reconcileBatch({ ...base, claimedProviderIds: new Set(['u1']), orders: [order('a')], upstream: [up('u1')], nowMs: T0 + ABSENCE_WAIT_MS });
++    expect(r.get('a')).toEqual({ action: 'refund' });
++  });
++
++  it('sends two competing purchases for one upstream order to review, never guessing', () => {
++    const r = reconcileBatch({ ...base, orders: [order('a'), order('b')], upstream: [up('u1')], nowMs: T0 + 60_000 });
++    expect(r.get('a')?.action).toBe('review');
++    expect(r.get('b')?.action).toBe('review');
++  });
++
++  it('two purchases and two upstream orders is ambiguous, not paired by luck', () => {
++    const r = reconcileBatch({ ...base, orders: [order('a'), order('b')], upstream: [up('u1'), up('u2')], nowMs: T0 + 60_000 });
++    expect(r.get('a')?.action).toBe('review');
++    expect(r.get('b')?.action).toBe('review');
++  });
++
++  it('does not match a different country, product, operator or time window', () => {
++    const wrong = [
++      up('x1', { country: 'russia' }),
++      up('x2', { product: 'whatsapp' }),
++      up('x3', { createdAtMs: T0 + 10 * 60_000 }),
++      up('x4', { createdAtMs: T0 - 5 * 60_000 })
++    ];
++    const r = reconcileBatch({ ...base, orders: [order('a')], upstream: wrong, nowMs: T0 + 60_000 });
++    expect(r.get('a')).toEqual({ action: 'wait' });
++    const op = reconcileBatch({ ...base, orders: [order('a', { operator: 'virtual21' })], upstream: [up('u1', { operator: 'beeline' })], nowMs: T0 + 60_000 });
++    expect(op.get('a')).toEqual({ action: 'wait' });
++  });
++});
+diff --git a/worker.ts b/worker.ts
+new file mode 100644
+index 0000000..36c3d2d
+--- /dev/null
++++ b/worker.ts
+@@ -0,0 +1,41 @@
++/**
++ * Custom Cloudflare Worker entry: serves the Next.js app exactly as before AND
++ * adds a scheduled (cron) handler. vercel.json cron entries do nothing on
++ * Cloudflare, so this is what actually polls 5sim for codes, settles
++ * unconfirmed purchases and refunds expired orders — every minute, with no
++ * customer needing to click "Check".
++ *
++ * Secrets: set CRON_SECRET with `npx wrangler secret put CRON_SECRET`
++ * (any long random string; the same value protects /api/cron/poll-numbers).
++ */
++// @ts-ignore — generated by `opennextjs-cloudflare build`, absent until the first build
++import openNextWorker from './.open-next/worker.js';
++
++type Env = { CRON_SECRET?: string; NEXT_PUBLIC_APP_URL?: string; [key: string]: unknown };
++type Ctx = { waitUntil(promise: Promise<unknown>): void; passThroughOnException(): void };
++
++export default {
++  fetch(request: Request, env: Env, ctx: Ctx) {
++    return openNextWorker.fetch(request, env, ctx);
++  },
++
++  async scheduled(_event: unknown, env: Env, ctx: Ctx) {
++    if (!env.CRON_SECRET) {
++      console.error('cron: CRON_SECRET is not set — skipping poll');
++      return;
++    }
++    const base = (env.NEXT_PUBLIC_APP_URL || 'https://ryzel.online').replace(/\/+$/, '');
++    const request = new Request(`${base}/api/cron/poll-numbers`, {
++      headers: { authorization: `Bearer ${env.CRON_SECRET}` }
++    });
++
++    ctx.waitUntil(
++      (async () => {
++        const res: Response = await openNextWorker.fetch(request, env, ctx);
++        const text = await res.text().catch(() => '');
++        if (!res.ok) console.error('cron poll failed', res.status, text.slice(0, 300));
++        else console.log('cron poll ok', text.slice(0, 300));
++      })()
++    );
++  }
++};
+diff --git a/wrangler.jsonc b/wrangler.jsonc
+index 5ac2d44..159493f 100644
+--- a/wrangler.jsonc
++++ b/wrangler.jsonc
+@@ -1,6 +1,6 @@
+ {
+ 	"$schema": "node_modules/wrangler/config-schema.json",
+-	"main": ".open-next/worker.js",
++	"main": "worker.ts",
+ 	"name": "ryzel",
+ 	"compatibility_date": "2026-08-01",
+ 	"compatibility_flags": [
+@@ -21,6 +21,10 @@
+ 		// see https://opennext.js.org/cloudflare/howtos/image
+ 		"binding": "IMAGES"
+ 	},
++	// Runs the number poller every minute (see worker.ts). Needs the CRON_SECRET secret.
++	"triggers": {
++		"crons": ["* * * * *"]
++	},
+ 	"observability": {
+ 		"enabled": true
+ 	},
+@@ -35,8 +39,9 @@
+ 		"PROVIDER_BASE_URL": "https://5sim.net/v1",
+ 		"PROVIDER_FALLBACK": "",
+ 		"ORDER_TIMEOUT_SECONDS": "600",
+-		"USD_NGN_RATE": "1600",
+-		"FIVESIM_RATE_TO_WALLET_MINOR_UNITS": "100",
++		// Naira per 1 unit of the price 5sim returns. LEAVE EMPTY until you have confirmed
++		// your 5sim billing currency; while empty, selling numbers is safely paused.
++		"FIVESIM_NGN_PER_UNIT": "",
+ 		"BREVO_SENDER_NAME": "Ryzel",
+ 		"BREVO_SENDER_EMAIL": "rply.smsone@gmail.com",
+ 		"PAYMENTS_PROVIDER": "korapay",
+diff --git a/wrangler.toml b/wrangler.toml
+index 8b1c293..46070e8 100644
+--- a/wrangler.toml
++++ b/wrangler.toml
+@@ -1,6 +1,6 @@
+ #:schema node_modules/wrangler/config-schema.json
+ name = "ryzel"
+-main = ".open-next/worker.js"
++main = "worker.ts"
+ compatibility_date = "2026-09-04"
+ compatibility_flags = ["nodejs_compat"]
+ 
+@@ -9,6 +9,10 @@ assets = { directory = ".open-next/assets", binding = "ASSETS" }
+ 
+ observability = { enabled = true }
+ 
++# Runs the number poller every minute (see worker.ts). Needs the CRON_SECRET secret.
++[triggers]
++crons = ["* * * * *"]
++
+ [vars]
+ NEXT_PUBLIC_SUPABASE_URL = "https://iuheykqammmxrtpamkpg.supabase.co"
+ NEXT_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml1aGV5a3FhbW1teHJ0cGFta3BnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYxNTA1NjYsImV4cCI6MjEwMTcyNjU2Nn0.iX6MGBBZX3LUQouQ8DlZPUclS-pLSQhcO3y5SZpUMcY"
+@@ -20,8 +24,9 @@ PROVIDER = "fivesim"
+ PROVIDER_BASE_URL = "https://5sim.net/v1"
+ PROVIDER_FALLBACK = ""
+ ORDER_TIMEOUT_SECONDS = "600"
+-USD_NGN_RATE = "1600"
+-FIVESIM_RATE_TO_WALLET_MINOR_UNITS = "100"
++# Naira per 1 unit of the price 5sim returns. LEAVE EMPTY until you have confirmed your
++# 5sim billing currency; while empty, selling numbers is safely paused.
++FIVESIM_NGN_PER_UNIT = ""
+ BREVO_SENDER_NAME = "Ryzel"
+ BREVO_SENDER_EMAIL = "rply.smsone@gmail.com"
+ PAYMENTS_PROVIDER = "korapay"

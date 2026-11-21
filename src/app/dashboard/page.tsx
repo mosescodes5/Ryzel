@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import { Wallet, Smartphone, ClipboardList, MessageCircle, ArrowUpRight } from 'lucide-react';
 import { createClient } from '@/lib/supabase/server';
 import { DCard, DButton, StatusBadge, PageHeader } from '@/components/dashboard/ui';
-import { formatCents } from '@/lib/utils';
+import { formatNaira } from '@/lib/utils';
 import { listActivationOrdersForUser } from '@/modules/numbers/services/activation-service';
 import { BuyNumberPanel } from '@/modules/numbers/components/buy-number-panel';
 
@@ -55,7 +55,7 @@ export default async function DashboardOverviewPage() {
           <div>
             <p className="text-xs text-slate-500">Wallet balance</p>
             <p className="mt-0.5 text-lg font-semibold text-slate-900">
-              {formatCents(profile?.wallet_balance_cents ?? 0)}
+              {formatNaira(profile?.wallet_balance_cents ?? 0)}
             </p>
           </div>
         </DCard>
@@ -129,7 +129,7 @@ export default async function DashboardOverviewPage() {
                       {order.product ?? '—'}
                     </td>
                     <td className="px-5 py-3.5 text-slate-500">{order.country ?? '—'}</td>
-                    <td className="px-5 py-3.5 text-slate-500">{formatCents(order.price_cents)}</td>
+                    <td className="px-5 py-3.5 text-slate-500">{formatNaira(order.price_cents)}</td>
                     <td className="px-5 py-3.5">
                       <StatusBadge status={order.status} />
                     </td>

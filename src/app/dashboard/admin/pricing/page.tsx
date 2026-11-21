@@ -5,7 +5,7 @@ import { createAdminClient } from '@/lib/supabase/server';
 import { DCard, DButton, PageHeader } from '@/components/dashboard/ui';
 import { listServiceOverrides, applyMarkup, type PricingRule } from '@/lib/pricing/number-pricing';
 import { getActivationProvider } from '@/modules/numbers/providers/activation-provider-manager';
-import { formatCents } from '@/lib/utils';
+import { formatNaira } from '@/lib/utils';
 import { updatePricing, saveServiceOverride, removeServiceOverride } from './actions';
 
 // Reference country used only to show admins roughly what 5Sim currently
@@ -18,7 +18,7 @@ async function getReferenceCosts(): Promise<Record<string, number>> {
   try {
     const provider = getActivationProvider();
     const products = await provider.listProducts({ country: REFERENCE_COUNTRY });
-    return Object.fromEntries(products.map((p) => [p.product, p.costCents]));
+    return Object.fromEntries(products.map((p) => [p.product, p.costNaira]));
   } catch {
     // 5sim can be briefly unreachable — the page still works, just without
     // the reference cost column.
@@ -143,17 +143,17 @@ export default async function DashboardPricingPage() {
                     <tr key={override.product} className="border-b border-slate-50 last:border-0">
                       <td className="px-5 py-3.5 font-medium capitalize text-slate-800">{override.product}</td>
                       <td className="px-5 py-3.5 text-slate-500">
-                        {refCost !== undefined ? formatCents(refCost) : '—'}
+                        {refCost !== undefined ? formatNaira(refCost) : '—'}
                       </td>
                       <td className="px-5 py-3.5 text-slate-500">
                         {override.markupType === 'percent'
                           ? `+${override.markupPercent}%`
-                          : `+${formatCents(override.markupFlatCents)} flat`}
+                          : `+${formatNaira(override.markupFlatCents)} flat`}
                         {' · min '}
-                        {formatCents(override.minPriceCents)}
+                        {formatNaira(override.minPriceCents)}
                       </td>
                       <td className="px-5 py-3.5 font-medium text-emerald-600">
-                        {refCost !== undefined ? formatCents(applyMarkup(refCost, rule)) : '—'}
+                        {refCost !== undefined ? formatNaira(applyMarkup(refCost, rule)) : '—'}
                       </td>
                       <td className="px-5 py-3.5 text-right">
                         <form action={removeServiceOverride}>

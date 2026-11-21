@@ -7,30 +7,17 @@ import type {
 } from '../activation-provider';
 import * as fivesim from './client';
 import type { FiveSimOrder } from './types';
+import { parseNairaPerUnit, toNaira } from '../../lib/naira';
 
 /**
- * 5sim's `price` field is a decimal major-unit number in 5sim's own
- * accounting currency. This app stores everything in minor units
- * ("cents") of your wallet's currency (NGN, given KORAPAY_DEFAULT_CURRENCY).
- *
- * If USD_NGN_RATE is set, this assumes 5sim's price is effectively in USD
- * and converts: NGN kobo = price * USD_NGN_RATE * 100. That assumption
- * needs verifying against a real 5sim invoice/receipt for your account —
- * 5sim has historically priced in RUB for some accounts, so confirm which
- * currency your account's `price` field is actually denominated in before
- * trusting the profit numbers.
- *
- * If USD_NGN_RATE isn't set, falls back to FIVESIM_RATE_TO_WALLET_MINOR_UNITS
- * ("how many wallet minor units equal 1 unit of 5sim's price field"),
- * then to a 1:1 placeholder — set one of these or costs will be wrong.
+ * 5sim's `price` field is a decimal number in 5sim's own billing currency.
+ * Everything here is converted to WHOLE NAIRA with one explicit rate:
+ *   FIVESIM_NGN_PER_UNIT = naira per 1 unit of 5sim's price field.
+ * No guess is ever made: if it isn't set, listing and buying fail closed.
+ * Costs round UP to the next whole naira so a sale can never undercharge.
  */
-function toWalletCents(fivesimPrice: number): number {
-  const usdToNgn = process.env.USD_NGN_RATE ? Number(process.env.USD_NGN_RATE) : null;
-  if (usdToNgn) {
-    return Math.round(fivesimPrice * usdToNgn * 100);
-  }
-  const rate = Number(process.env.FIVESIM_RATE_TO_WALLET_MINOR_UNITS ?? '100');
-  return Math.round(fivesimPrice * rate);
+function toWalletNaira(fivesimPrice: number): number {
+  return toNaira(fivesimPrice, parseNairaPerUnit(process.env.FIVESIM_NGN_PER_UNIT));
 }
 
 function mapStatus(status: FiveSimOrder['status']): ActivationOrder['status'] {
@@ -60,7 +47,7 @@ function mapOrder(order: FiveSimOrder): ActivationOrder {
     product: order.product,
     operator: order.operator,
     country: order.country,
-    costCents: toWalletCents(order.price),
+    costNaira: toWalletNaira(order.price),
     status: mapStatus(order.status),
     smsCode: latestSms?.code ?? null,
     smsText: latestSms?.text ?? null,
@@ -91,7 +78,7 @@ export class FiveSimProvider implements ActivationProvider {
       .map(([product, entry]) => ({
         product,
         operator: 'any',
-        costCents: toWalletCents(entry.Price),
+        costNaira: toWalletNaira(entry.Price),
         quantity: entry.Qty
       }));
   }
@@ -106,11 +93,11 @@ export class FiveSimProvider implements ActivationProvider {
       .filter(([, entry]) => entry.count > 0)
       .map(([operator, entry]) => ({
         operator,
-        costCents: toWalletCents(entry.cost),
+        costNaira: toWalletNaira(entry.cost),
         successRate: entry.rate ?? null,
         quantity: entry.count
       }))
-      .sort((a, b) => a.costCents - b.costCents);
+      .sort((a, b) => a.costNaira - b.costNaira);
   }
 
   async buyActivation(params: { country: string; operator: string; product: string }): Promise<ActivationOrder> {
@@ -129,5 +116,9 @@ export class FiveSimProvider implements ActivationProvider {
 
   async finishOrder(providerOrderId: string): Promise<void> {
     await fivesim.finishOrder(providerOrderId);
+  }
+
+  async listRecentActivations(limit: number) {
+    return fivesim.listRecentActivations(limit);
   }
 }

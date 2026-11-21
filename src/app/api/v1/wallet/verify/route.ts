@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { getPaymentProvider } from '@/lib/payments/providers/provider-manager';
-import { creditWallet } from '@/lib/payments/wallet';
+import { settlePayment } from '@/lib/payments/wallet';
 
 // Runs on Cloudflare's Workers runtime via @cloudflare/next-on-pages.
 
@@ -46,15 +46,16 @@ export async function GET(request: Request) {
   const verified = await provider.verifyCharge(reference);
 
   if (verified.status === 'success') {
-    await creditWallet({
-      userId: payment.user_id,
-      amountCents: payment.amount_cents,
-      reason: 'wallet_topup',
-      referenceType: 'payments',
-      referenceId: payment.id
+    const settled = await settlePayment({
+      reference,
+      verifiedAmount: verified.amountCents,
+      verifiedCurrency: verified.currency
     });
-    await admin.from('payments').update({ status: 'succeeded' }).eq('id', payment.id);
-    return NextResponse.json({ data: { status: 'succeeded' } });
+    if (settled.outcome === 'settled' || settled.outcome === 'already_settled') {
+      return NextResponse.json({ data: { status: 'succeeded' } });
+    }
+    // amount_mismatch / not_settleable: money was NOT credited — surface it, don't fake success.
+    return NextResponse.json({ data: { status: 'review' } });
   }
 
   if (verified.status === 'failed') {

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { formatCents } from '@/lib/utils';
+import { formatNaira } from '@/lib/utils';
 
 type Props = {
   id: string;
@@ -38,7 +38,7 @@ export function NumberCard({ id, phoneNumber, countryCode, monthlyPriceCents }: 
     <Card className="flex items-center justify-between">
       <div>
         <p className="font-medium text-slate-900">{phoneNumber}</p>
-        <p className="text-sm text-slate-500">{countryCode} · {formatCents(monthlyPriceCents)}/mo</p>
+        <p className="text-sm text-slate-500">{countryCode} · {formatNaira(monthlyPriceCents)}/mo</p>
         {error && <p className="mt-1 text-xs text-rose-600">{error}</p>}
       </div>
       <Button onClick={handlePurchase} disabled={loading}>

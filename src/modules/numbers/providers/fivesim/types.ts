@@ -49,3 +49,8 @@ export type FiveSimOrder = {
   created_at: string;
   country: string;
 };
+
+// GET /user/orders?category=activation&limit=N&offset=0&order=id&reverse=true
+// Field casing has varied between 5sim doc versions, so the parser accepts both
+// (see client.ts). UNVERIFIED against a live account — confirm with one real call.
+export type FiveSimHistoryRow = Record<string, unknown>;

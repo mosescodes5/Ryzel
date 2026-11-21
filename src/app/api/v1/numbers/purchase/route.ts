@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { purchaseActivationNumber } from '@/modules/numbers/services/activation-service';
+import { purchaseActivationNumber, PurchasePendingError } from '@/modules/numbers/services/activation-service';
 import { checkRateLimit } from '@/lib/rate-limit/rate-limit';
 import { purchaseNumberSchema, parseOrError } from '@/lib/validation/schemas';
 
@@ -33,6 +33,13 @@ export async function POST(request: Request) {
     const order = await purchaseActivationNumber({ userId: user.id, ...parsed.data });
     return NextResponse.json({ data: order }, { status: 201 });
   } catch (err) {
+    if (err instanceof PurchasePendingError) {
+      // Charged and recorded, number not yet confirmed: not an error, and not a failure.
+      return NextResponse.json(
+        { data: { id: err.orderId, status: 'purchasing' }, message: err.message },
+        { status: 202 }
+      );
+    }
     const message = err instanceof Error ? err.message : 'Purchase failed';
     return NextResponse.json({ error: message }, { status: 400 });
   }
