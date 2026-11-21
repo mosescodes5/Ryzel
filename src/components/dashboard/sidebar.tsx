@@ -18,7 +18,8 @@ import {
   Users,
   Layers,
   PackageSearch,
-  FileText
+  FileText,
+  AlertTriangle
 } from 'lucide-react';
 import { cn, formatNaira } from '@/lib/utils';
 
@@ -41,6 +42,7 @@ const MAIN_LINKS: NavItem[] = [
 const ADMIN_LINKS: NavItem[] = [
   { href: '/dashboard/admin', label: 'Overview', icon: LayoutGrid },
   { href: '/dashboard/admin/orders', label: 'Orders & Profit', icon: Receipt },
+  { href: '/dashboard/admin/review', label: 'Review Orders', icon: AlertTriangle },
   { href: '/dashboard/admin/pricing', label: 'Pricing', icon: Tag },
   { href: '/dashboard/admin/services', label: 'Services', icon: Layers },
   { href: '/dashboard/admin/packages', label: 'Package Tracker (Admin)', icon: PackageSearch },
