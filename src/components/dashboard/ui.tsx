@@ -37,7 +37,9 @@ const STATUS_STYLES: Record<string, string> = {
   awaiting_sms: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200',
   cancelled: 'bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200',
   expired: 'bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200',
-  failed: 'bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200'
+  failed: 'bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200',
+  purchasing: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200',
+  needs_review: 'bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200'
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -45,9 +47,11 @@ const STATUS_LABEL: Record<string, string> = {
   received: 'Code received',
   active: 'Active',
   awaiting_sms: 'Waiting for code',
-  cancelled: 'Cancelled',
-  expired: 'Expired',
-  failed: 'Failed'
+  cancelled: 'Cancelled (refunded)',
+  expired: 'Expired (refunded)',
+  failed: 'Failed (refunded)',
+  purchasing: 'Confirming purchase',
+  needs_review: 'Under review'
 };
 
 export function StatusBadge({ status }: { status: string }) {

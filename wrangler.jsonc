@@ -1,6 +1,6 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"main": ".open-next/worker.js",
+	"main": "worker.ts",
 	"name": "ryzel",
 	"compatibility_date": "2026-08-01",
 	"compatibility_flags": [
@@ -21,6 +21,10 @@
 		// see https://opennext.js.org/cloudflare/howtos/image
 		"binding": "IMAGES"
 	},
+	// Runs the number poller every minute (see worker.ts). Needs the CRON_SECRET secret.
+	"triggers": {
+		"crons": ["* * * * *"]
+	},
 	"observability": {
 		"enabled": true
 	},
@@ -35,8 +39,9 @@
 		"PROVIDER_BASE_URL": "https://5sim.net/v1",
 		"PROVIDER_FALLBACK": "",
 		"ORDER_TIMEOUT_SECONDS": "600",
-		"USD_NGN_RATE": "1600",
-		"FIVESIM_RATE_TO_WALLET_MINOR_UNITS": "100",
+		// Naira per 1 unit of the price 5sim returns. LEAVE EMPTY until you have confirmed
+		// your 5sim billing currency; while empty, selling numbers is safely paused.
+		"FIVESIM_NGN_PER_UNIT": "",
 		"BREVO_SENDER_NAME": "Ryzel",
 		"BREVO_SENDER_EMAIL": "rply.smsone@gmail.com",
 		"PAYMENTS_PROVIDER": "korapay",

@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { ArrowDownLeft, ArrowUpRight } from 'lucide-react';
 import { createClient } from '@/lib/supabase/server';
 import { DCard, PageHeader } from '@/components/dashboard/ui';
-import { formatCents } from '@/lib/utils';
+import { formatNaira } from '@/lib/utils';
 
 const REASON_LABEL: Record<string, string> = {
   wallet_topup: 'Wallet top-up',
@@ -61,7 +61,7 @@ export default async function TransactionsPage() {
                   }`}
                 >
                   {tx.type === 'credit' ? '+' : '−'}
-                  {formatCents(tx.amount_cents, tx.currency)}
+                  {formatNaira(tx.amount_cents)}
                 </p>
               </li>
             ))}

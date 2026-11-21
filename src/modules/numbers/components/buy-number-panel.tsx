@@ -4,11 +4,11 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Search, Smartphone, ShieldCheck } from 'lucide-react';
 import { DCard, DButton } from '@/components/dashboard/ui';
-import { formatCents, cn } from '@/lib/utils';
+import { formatNaira, cn } from '@/lib/utils';
 
 type Country = { code: string; name: string };
-type Service = { product: string; operator: string; priceCents: number; quantity: number };
-type Offer = { operator: string; priceCents: number; successRate: number | null; quantity: number };
+type Service = { product: string; operator: string; priceNaira: number; quantity: number };
+type Offer = { operator: string; priceNaira: number; successRate: number | null; quantity: number };
 
 function formatOperatorLabel(operator: string) {
   if (!operator || operator === 'any') return 'Standard';
@@ -269,7 +269,7 @@ export function BuyNumberPanel() {
                   <p className="text-sm font-semibold text-slate-900">{formatOperatorLabel(offer.operator)}</p>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                     <span>
-                      Price <span className="font-mono font-medium text-slate-800">{formatCents(offer.priceCents)}</span>
+                      Price <span className="font-mono font-medium text-slate-800">{formatNaira(offer.priceNaira)}</span>
                     </span>
                     {offer.successRate != null && (
                       <span className={cn('rounded-full px-2 py-0.5 font-medium', successRateTone(offer.successRate))}>

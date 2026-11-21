@@ -5,7 +5,7 @@ export type ActivationCountry = {
 
 export type ActivationOffer = {
   operator: string; // a specific pool id (or 'virtual21', 'beeline', etc — provider-specific), never 'any'
-  costCents: number; // what the provider charges RYZEL for this pool, in minor units
+  costNaira: number; // what the provider charges RYZEL for this pool, in whole naira (rounded up)
   successRate: number | null; // 0-100 historical delivery rate for this pool, if the provider reports one
   quantity: number; // how many are currently available in this pool
 };
@@ -13,8 +13,16 @@ export type ActivationOffer = {
 export type ActivationProduct = {
   product: string; // e.g. 'telegram', 'whatsapp', 'google'
   operator: string; // e.g. 'any', or a specific carrier the provider uses
-  costCents: number; // what the provider charges RYZEL, in minor units
+  costNaira: number; // what the provider charges RYZEL, in whole naira (rounded up)
   quantity: number; // how many are currently available
+};
+
+export type UpstreamActivationSummary = {
+  providerOrderId: string;
+  createdAtMs: number;
+  country: string;
+  product: string;
+  operator: string | null;
 };
 
 export type ActivationOrder = {
@@ -23,7 +31,7 @@ export type ActivationOrder = {
   product: string;
   operator: string;
   country: string;
-  costCents: number;
+  costNaira: number;
   status: 'awaiting_sms' | 'received' | 'cancelled' | 'expired' | 'finished' | 'failed';
   smsCode: string | null;
   smsText: string | null;
@@ -45,4 +53,6 @@ export interface ActivationProvider {
   checkOrder(providerOrderId: string): Promise<ActivationOrder>;
   cancelOrder(providerOrderId: string): Promise<void>;
   finishOrder(providerOrderId: string): Promise<void>;
+  /** Newest-first list of what we recently bought upstream; used to settle purchases whose outcome we never saw. */
+  listRecentActivations(limit: number): Promise<UpstreamActivationSummary[]>;
 }

@@ -20,7 +20,7 @@ import {
   PackageSearch,
   FileText
 } from 'lucide-react';
-import { cn, formatCents } from '@/lib/utils';
+import { cn, formatNaira } from '@/lib/utils';
 
 type NavItem = {
   href: string;
@@ -86,7 +86,7 @@ export function Sidebar({
           Wallet balance
         </p>
         <p className="mt-0.5 text-xl font-semibold text-emerald-950">
-          {formatCents(walletBalanceCents)}
+          {formatNaira(walletBalanceCents)}
         </p>
       </div>
 

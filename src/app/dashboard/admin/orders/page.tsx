@@ -3,7 +3,7 @@ import { Wallet, Receipt, TrendingUp } from 'lucide-react';
 import { getCurrentUserWithRole } from '@/lib/permissions/permissions';
 import { createAdminClient } from '@/lib/supabase/server';
 import { DCard, PageHeader, StatusBadge } from '@/components/dashboard/ui';
-import { formatCents } from '@/lib/utils';
+import { formatNaira } from '@/lib/utils';
 
 export default async function DashboardAdminOrdersPage() {
   const { user, role } = await getCurrentUserWithRole();
@@ -18,8 +18,10 @@ export default async function DashboardAdminOrdersPage() {
     .limit(300);
 
   const rows = orders ?? [];
-  const totalRevenue = rows.reduce((sum: number, o) => sum + o.price_cents, 0);
-  const totalCost = rows.reduce((sum: number, o) => sum + o.cost_cents, 0);
+  // Only orders that actually delivered a code earned money; refunded/cancelled/expired ones did not.
+  const earned = rows.filter((o) => o.status === 'received' || o.status === 'finished' || o.status === 'active');
+  const totalRevenue = earned.reduce((sum: number, o) => sum + o.price_cents, 0);
+  const totalCost = earned.reduce((sum: number, o) => sum + o.cost_cents, 0);
   const totalProfit = totalRevenue - totalCost;
 
   return (
@@ -33,7 +35,7 @@ export default async function DashboardAdminOrdersPage() {
           </span>
           <div>
             <p className="text-xs text-slate-500">Revenue (charged to customers)</p>
-            <p className="mt-0.5 text-lg font-semibold text-slate-900">{formatCents(totalRevenue)}</p>
+            <p className="mt-0.5 text-lg font-semibold text-slate-900">{formatNaira(totalRevenue)}</p>
           </div>
         </DCard>
         <DCard className="flex items-center gap-4">
@@ -42,7 +44,7 @@ export default async function DashboardAdminOrdersPage() {
           </span>
           <div>
             <p className="text-xs text-slate-500">Cost (paid to 5Sim)</p>
-            <p className="mt-0.5 text-lg font-semibold text-slate-900">{formatCents(totalCost)}</p>
+            <p className="mt-0.5 text-lg font-semibold text-slate-900">{formatNaira(totalCost)}</p>
           </div>
         </DCard>
         <DCard className="flex items-center gap-4 border-emerald-200 bg-emerald-50/60">
@@ -51,7 +53,7 @@ export default async function DashboardAdminOrdersPage() {
           </span>
           <div>
             <p className="text-xs text-emerald-700">Profit</p>
-            <p className="mt-0.5 text-lg font-semibold text-emerald-700">{formatCents(totalProfit)}</p>
+            <p className="mt-0.5 text-lg font-semibold text-emerald-700">{formatNaira(totalProfit)}</p>
           </div>
         </DCard>
       </div>
@@ -85,17 +87,17 @@ export default async function DashboardAdminOrdersPage() {
                       <td className="px-5 py-3.5 capitalize text-slate-500">{order.product ?? '—'}</td>
                       <td className="px-5 py-3.5 text-slate-500">{order.country ?? '—'}</td>
                       <td className="whitespace-nowrap px-5 py-3.5 text-slate-800">
-                        {formatCents(order.price_cents)}
+                        {formatNaira(order.price_cents)}
                       </td>
                       <td className="whitespace-nowrap px-5 py-3.5 text-slate-500">
-                        {formatCents(order.cost_cents)}
+                        {formatNaira(order.cost_cents)}
                       </td>
                       <td
                         className={`whitespace-nowrap px-5 py-3.5 font-medium ${
                           profit >= 0 ? 'text-emerald-600' : 'text-rose-600'
                         }`}
                       >
-                        {formatCents(profit)}
+                        {formatNaira(profit)}
                       </td>
                       <td className="px-5 py-3.5">
                         <StatusBadge status={order.status} />

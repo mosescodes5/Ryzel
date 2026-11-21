@@ -125,12 +125,16 @@ export async function deleteServiceOverride(product: string) {
   if (error) throw error;
 }
 
-/** Applies the current markup to a provider cost, in minor units ("cents"). */
-export function applyMarkup(costCents: number, rule: PricingRule): number {
+/**
+ * Applies the current markup to a provider cost. Everything is whole naira
+ * (the markup_flat_cents / min_price_cents columns keep their legacy names
+ * but hold naira). Always rounds UP so a sale can never undercharge.
+ */
+export function applyMarkup(costNaira: number, rule: PricingRule): number {
   const marked =
     rule.markupType === 'percent'
-      ? Math.round(costCents * (1 + rule.markupPercent / 100))
-      : costCents + rule.markupFlatCents;
+      ? Math.ceil(Math.round(costNaira * (1 + rule.markupPercent / 100) * 1e6) / 1e6)
+      : costNaira + rule.markupFlatCents;
 
-  return Math.max(marked, rule.minPriceCents);
+  return Math.max(Math.ceil(marked), rule.minPriceCents);
 }

@@ -4,8 +4,11 @@ export function cn(...inputs: ClassValue[]) {
   return clsx(inputs);
 }
 
-export function formatCents(cents: number, currency = "NGN") {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(
-    cents / 100,
-  );
+/** Formats a stored wallet/order amount. Amounts are whole naira — nothing is divided. */
+export function formatNaira(naira: number) {
+  return new Intl.NumberFormat("en-NG", {
+    style: "currency",
+    currency: "NGN",
+    maximumFractionDigits: 0,
+  }).format(naira);
 }

@@ -109,12 +109,24 @@ export type Database = {
           country: string | null;
           operator: string | null;
           product: string | null;
-          status: 'awaiting_sms' | 'received' | 'active' | 'finished' | 'cancelled' | 'expired' | 'failed';
+          status:
+            | 'purchasing'
+            | 'awaiting_sms'
+            | 'received'
+            | 'active'
+            | 'finished'
+            | 'cancelled'
+            | 'expired'
+            | 'failed'
+            | 'needs_review';
           price_cents: number;
           cost_cents: number;
           renews_at: string | null;
           expires_at: string | null;
           last_checked_at: string | null;
+          purchase_started_at: string | null;
+          refunded_at: string | null;
+          review_note: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -293,6 +305,21 @@ export type Database = {
       settle_payment: {
         Args: { p_reference: string; p_verified_amount: number; p_verified_currency: string };
         Returns: { outcome: string; new_balance: number | null }[];
+      };
+      order_reserve: {
+        Args: {
+          p_user: string;
+          p_price: number;
+          p_provider: string;
+          p_country: string;
+          p_operator: string;
+          p_product: string;
+        };
+        Returns: { order_id: string; new_balance: number }[];
+      };
+      order_refund: {
+        Args: { p_order: string; p_final_status: 'cancelled' | 'expired' | 'failed'; p_reason: string };
+        Returns: { outcome: string; refunded: number }[];
       };
       increment_rate_limit: {
         Args: { p_key: string; p_window_start: string };
