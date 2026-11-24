@@ -42,3 +42,22 @@ export function toNaira(providerPrice: number, nairaPerUnit: number): number {
 export function formatNairaAmount(naira: number): string {
   return `₦${Math.round(naira).toLocaleString('en-NG')}`;
 }
+
+export const FX_RATE_MIN = 0.01;
+export const FX_RATE_MAX = 100_000;
+export const FX_CHANGE_CONFIRM_RATIO = 0.25;
+
+/** Validates a rate typed into the admin form. Throws a plain-English error. */
+export function validateFxRateInput(raw: unknown): number {
+  const rate = typeof raw === 'number' ? raw : Number(String(raw ?? '').replace(/,/g, '').trim());
+  if (!Number.isFinite(rate) || rate < FX_RATE_MIN || rate > FX_RATE_MAX) {
+    throw new Error(`Enter a rate between ${FX_RATE_MIN} and ${FX_RATE_MAX.toLocaleString('en-US')} naira.`);
+  }
+  return Math.round(rate * 10_000) / 10_000;
+}
+
+/** A big jump is usually a typo (1500 -> 15000). It needs an explicit tick-box to go through. */
+export function fxChangeNeedsConfirm(previous: number | null, next: number): boolean {
+  if (previous === null || previous <= 0) return false;
+  return Math.abs(next - previous) / previous > FX_CHANGE_CONFIRM_RATIO;
+}

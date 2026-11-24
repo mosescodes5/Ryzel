@@ -7,18 +7,18 @@ import type {
 } from '../activation-provider';
 import * as fivesim from './client';
 import type { FiveSimOrder } from './types';
-import { parseNairaPerUnit, toNaira } from '../../lib/naira';
+import { PricingConfigError, toNaira } from '../../lib/naira';
 
 /**
- * 5sim's `price` field is a decimal number in 5sim's own billing currency.
- * Everything here is converted to WHOLE NAIRA with one explicit rate:
- *   FIVESIM_NGN_PER_UNIT = naira per 1 unit of 5sim's price field.
- * No guess is ever made: if it isn't set, listing and buying fail closed.
- * Costs round UP to the next whole naira so a sale can never undercharge.
+ * 5sim's `price` field is a decimal number in 5sim's own billing currency. It is
+ * converted to WHOLE NAIRA with the admin-set rate (see lib/pricing/fx-rate.ts),
+ * always rounded UP so a sale can never undercharge.
+ *
+ * `getRate` returns null when no rate is configured. Quoting and buying then fail
+ * closed, but checking/cancelling existing orders must keep working — customers
+ * are waiting for codes — so those paths use a rate-less mapping.
  */
-function toWalletNaira(fivesimPrice: number): number {
-  return toNaira(fivesimPrice, parseNairaPerUnit(process.env.FIVESIM_NGN_PER_UNIT));
-}
+export type RateResolver = () => Promise<number | null>;
 
 function mapStatus(status: FiveSimOrder['status']): ActivationOrder['status'] {
   switch (status) {
@@ -39,7 +39,7 @@ function mapStatus(status: FiveSimOrder['status']): ActivationOrder['status'] {
   }
 }
 
-function mapOrder(order: FiveSimOrder): ActivationOrder {
+function mapOrder(order: FiveSimOrder, rate: number | null): ActivationOrder {
   const latestSms = order.sms && order.sms.length > 0 ? order.sms[order.sms.length - 1] : null;
   return {
     providerOrderId: String(order.id),
@@ -47,7 +47,7 @@ function mapOrder(order: FiveSimOrder): ActivationOrder {
     product: order.product,
     operator: order.operator,
     country: order.country,
-    costNaira: toWalletNaira(order.price),
+    costNaira: rate === null ? 0 : toNaira(order.price, rate),
     status: mapStatus(order.status),
     smsCode: latestSms?.code ?? null,
     smsText: latestSms?.text ?? null,
@@ -57,6 +57,18 @@ function mapOrder(order: FiveSimOrder): ActivationOrder {
 
 export class FiveSimProvider implements ActivationProvider {
   readonly name = '5sim';
+
+  constructor(private readonly getRate: RateResolver) {}
+
+  private async requireRate(): Promise<number> {
+    const rate = await this.getRate();
+    if (rate === null) {
+      throw new PricingConfigError(
+        'Number pricing is not set up yet: an admin needs to enter the dollar rate. Purchases are paused.'
+      );
+    }
+    return rate;
+  }
 
   async listCountries(): Promise<ActivationCountry[]> {
     const countries = await fivesim.getGuestCountries();
@@ -71,6 +83,7 @@ export class FiveSimProvider implements ActivationProvider {
   }
 
   async listProducts({ country }: { country: string }): Promise<ActivationProduct[]> {
+    const rate = await this.requireRate();
     const products = await fivesim.getGuestProducts(country, 'any');
 
     return Object.entries(products)
@@ -78,12 +91,13 @@ export class FiveSimProvider implements ActivationProvider {
       .map(([product, entry]) => ({
         product,
         operator: 'any',
-        costNaira: toWalletNaira(entry.Price),
+        costNaira: toNaira(entry.Price, rate),
         quantity: entry.Qty
       }));
   }
 
   async listOffers({ country, product }: { country: string; product: string }): Promise<ActivationOffer[]> {
+    const rate = await this.requireRate();
     const prices = await fivesim.getGuestPrices(country, product);
     const operators = prices[country]?.[product];
 
@@ -93,7 +107,7 @@ export class FiveSimProvider implements ActivationProvider {
       .filter(([, entry]) => entry.count > 0)
       .map(([operator, entry]) => ({
         operator,
-        costNaira: toWalletNaira(entry.cost),
+        costNaira: toNaira(entry.cost, rate),
         successRate: entry.rate ?? null,
         quantity: entry.count
       }))
@@ -101,13 +115,14 @@ export class FiveSimProvider implements ActivationProvider {
   }
 
   async buyActivation(params: { country: string; operator: string; product: string }): Promise<ActivationOrder> {
+    const rate = await this.requireRate(); // never buy without a price basis
     const order = await fivesim.buyActivation(params);
-    return mapOrder(order);
+    return mapOrder(order, rate);
   }
 
   async checkOrder(providerOrderId: string): Promise<ActivationOrder> {
     const order = await fivesim.checkOrder(providerOrderId);
-    return mapOrder(order);
+    return mapOrder(order, await this.getRate());
   }
 
   async cancelOrder(providerOrderId: string): Promise<void> {

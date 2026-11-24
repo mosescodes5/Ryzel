@@ -125,6 +125,7 @@ export type Database = {
           expires_at: string | null;
           last_checked_at: string | null;
           purchase_started_at: string | null;
+          fx_rate: number | null;
           refunded_at: string | null;
           review_note: string | null;
           created_at: string;
@@ -135,6 +136,18 @@ export type Database = {
           price_cents: number;
         };
         Update: Partial<Database['public']['Tables']['number_orders']['Row']>;
+        Relationships: [];
+      };
+      pricing_settings: {
+        Row: {
+          id: boolean;
+          fx_rate_ngn_per_unit: number | null;
+          fx_currency: string;
+          updated_by: string | null;
+          updated_at: string;
+        };
+        Insert: Partial<Database['public']['Tables']['pricing_settings']['Row']>;
+        Update: Partial<Database['public']['Tables']['pricing_settings']['Row']>;
         Relationships: [];
       };
       number_pricing: {
@@ -305,6 +318,10 @@ export type Database = {
       settle_payment: {
         Args: { p_reference: string; p_verified_amount: number; p_verified_currency: string };
         Returns: { outcome: string; new_balance: number | null }[];
+      };
+      admin_profit_summary: {
+        Args: Record<PropertyKey, never>;
+        Returns: { period: string; orders: number; revenue: number; cost: number }[];
       };
       order_reserve: {
         Args: {

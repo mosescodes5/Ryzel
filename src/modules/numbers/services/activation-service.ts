@@ -5,6 +5,7 @@ import { recordInboundSms } from '@/modules/sms/services/sms-service';
 import { sendSms, buildCodeReceivedMessage } from '@/lib/notifications/sms/brevo';
 import type { ActivationOrder } from '../providers/activation-provider';
 import { reserveOrder, refundOrder } from './order-ledger';
+import { getNairaPerUnitOrNull } from '@/lib/pricing/fx-rate';
 import { ProviderError, isDefiniteNonPurchase, customerMessageForRejection } from '../lib/provider-errors';
 import { reconcileBatch, type PurchasingOrder } from '../lib/reconcile';
 
@@ -155,6 +156,8 @@ export async function purchaseActivationNumber({
     bought.expiresAt ??
     new Date(Date.now() + Number(process.env.ORDER_TIMEOUT_SECONDS ?? '600') * 1000).toISOString();
 
+  const fxRate = await getNairaPerUnitOrNull();
+
   const { data: row, error } = await admin
     .from('number_orders')
     .update({
@@ -162,10 +165,9 @@ export async function purchaseActivationNumber({
       phone_number: bought.phoneNumber,
       operator: bought.operator,
       product: bought.product,
-      // Once we hold the provider's order id the order is no longer "unconfirmed".
-      // The poller's next check records the true state (code / cancelled / expired).
-      status: 'awaiting_sms',
+      status: bought.status === 'awaiting_sms' ? 'awaiting_sms' : 'purchasing',
       cost_cents: bought.costNaira,
+      fx_rate: fxRate,
       expires_at: expiresAt,
       last_checked_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -299,7 +301,6 @@ async function reconcilePurchasing(admin: AdminClient) {
     .from('number_orders')
     .select('id, country, product, operator, purchase_started_at, provider')
     .eq('status', 'purchasing')
-    .is('provider_order_id', null) // an order we already hold a provider id for is never "unconfirmed"
     .lt('purchase_started_at', cutoff)
     .order('purchase_started_at', { ascending: true })
     .limit(20);
@@ -368,7 +369,7 @@ async function reconcilePurchasing(admin: AdminClient) {
             provider_order_id: real.providerOrderId,
             phone_number: real.phoneNumber,
             operator: real.operator,
-            cost_cents: real.costNaira,
+            ...(real.costNaira > 0 ? { cost_cents: real.costNaira } : {}), // keep unknown cost unset, never 0
             status: 'awaiting_sms',
             expires_at: real.expiresAt,
             last_checked_at: now,
