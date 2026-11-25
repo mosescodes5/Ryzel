@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { getPaymentProvider } from '@/lib/payments/providers/provider-manager';
-import { creditWallet } from '@/lib/payments/wallet';
+import { settlePayment } from '@/lib/payments/wallet';
 
 // Runs on Cloudflare's Workers runtime via @cloudflare/next-on-pages.
 
@@ -59,15 +59,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true });
   }
 
-  await creditWallet({
-    userId: payment.user_id,
-    amountCents: payment.amount_cents,
-    reason: 'wallet_topup',
-    referenceType: 'payments',
-    referenceId: payment.id
+  // Atomic + idempotent: safe even if /wallet/verify settles the same payment concurrently.
+  // The amount/currency Korapay reports must match what we initiated or nothing is credited.
+  const settled = await settlePayment({
+    reference,
+    verifiedAmount: verified.amountCents,
+    verifiedCurrency: verified.currency
   });
 
-  await admin.from('payments').update({ status: 'succeeded' }).eq('id', payment.id);
+  if (settled.outcome === 'amount_mismatch') {
+    console.error('Korapay amount/currency mismatch — payment NOT credited', { reference });
+    // 200 so Korapay stops retrying; the mismatch is recorded in audit_logs for review.
+  }
 
   return NextResponse.json({ ok: true });
 }

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw, XCircle, Copy } from 'lucide-react';
 import { DCard, DButton, StatusBadge, PageHeader } from '@/components/dashboard/ui';
-import { formatCents } from '@/lib/utils';
+import { formatNaira } from '@/lib/utils';
 
 type Order = {
   id: string;
@@ -104,7 +104,7 @@ export default function OrdersPage() {
               </div>
               <div>
                 <p className="text-xs text-slate-400">Price</p>
-                <p className="mt-0.5 font-medium text-emerald-600">{formatCents(order.price_cents)}</p>
+                <p className="mt-0.5 font-medium text-emerald-600">{formatNaira(order.price_cents)}</p>
               </div>
               <div>
                 <p className="text-xs text-slate-400">Status</p>

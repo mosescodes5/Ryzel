@@ -1,0 +1,356 @@
+diff --git a/src/app/api/v1/wallet/verify/route.ts b/src/app/api/v1/wallet/verify/route.ts
+index 5615cd0..e828a7b 100644
+--- a/src/app/api/v1/wallet/verify/route.ts
++++ b/src/app/api/v1/wallet/verify/route.ts
+@@ -1,7 +1,7 @@
+ import { NextResponse } from 'next/server';
+ import { createClient, createAdminClient } from '@/lib/supabase/server';
+ import { getPaymentProvider } from '@/lib/payments/providers/provider-manager';
+-import { creditWallet } from '@/lib/payments/wallet';
++import { settlePayment } from '@/lib/payments/wallet';
+ 
+ // Runs on Cloudflare's Workers runtime via @cloudflare/next-on-pages.
+ 
+@@ -46,15 +46,16 @@ export async function GET(request: Request) {
+   const verified = await provider.verifyCharge(reference);
+ 
+   if (verified.status === 'success') {
+-    await creditWallet({
+-      userId: payment.user_id,
+-      amountCents: payment.amount_cents,
+-      reason: 'wallet_topup',
+-      referenceType: 'payments',
+-      referenceId: payment.id
++    const settled = await settlePayment({
++      reference,
++      verifiedAmount: verified.amountCents,
++      verifiedCurrency: verified.currency
+     });
+-    await admin.from('payments').update({ status: 'succeeded' }).eq('id', payment.id);
+-    return NextResponse.json({ data: { status: 'succeeded' } });
++    if (settled.outcome === 'settled' || settled.outcome === 'already_settled') {
++      return NextResponse.json({ data: { status: 'succeeded' } });
++    }
++    // amount_mismatch / not_settleable: money was NOT credited — surface it, don't fake success.
++    return NextResponse.json({ data: { status: 'review' } });
+   }
+ 
+   if (verified.status === 'failed') {
+diff --git a/src/app/api/v1/wallet/webhook/route.ts b/src/app/api/v1/wallet/webhook/route.ts
+index 704d7ff..eeb11a9 100644
+--- a/src/app/api/v1/wallet/webhook/route.ts
++++ b/src/app/api/v1/wallet/webhook/route.ts
+@@ -1,7 +1,7 @@
+ import { NextResponse } from 'next/server';
+ import { createAdminClient } from '@/lib/supabase/server';
+ import { getPaymentProvider } from '@/lib/payments/providers/provider-manager';
+-import { creditWallet } from '@/lib/payments/wallet';
++import { settlePayment } from '@/lib/payments/wallet';
+ 
+ // Runs on Cloudflare's Workers runtime via @cloudflare/next-on-pages.
+ 
+@@ -59,15 +59,18 @@ export async function POST(request: Request) {
+     return NextResponse.json({ ok: true });
+   }
+ 
+-  await creditWallet({
+-    userId: payment.user_id,
+-    amountCents: payment.amount_cents,
+-    reason: 'wallet_topup',
+-    referenceType: 'payments',
+-    referenceId: payment.id
++  // Atomic + idempotent: safe even if /wallet/verify settles the same payment concurrently.
++  // The amount/currency Korapay reports must match what we initiated or nothing is credited.
++  const settled = await settlePayment({
++    reference,
++    verifiedAmount: verified.amountCents,
++    verifiedCurrency: verified.currency
+   });
+ 
+-  await admin.from('payments').update({ status: 'succeeded' }).eq('id', payment.id);
++  if (settled.outcome === 'amount_mismatch') {
++    console.error('Korapay amount/currency mismatch — payment NOT credited', { reference });
++    // 200 so Korapay stops retrying; the mismatch is recorded in audit_logs for review.
++  }
+ 
+   return NextResponse.json({ ok: true });
+ }
+diff --git a/src/app/dashboard/wallet/page.tsx b/src/app/dashboard/wallet/page.tsx
+index 60b27b1..2b01ef0 100644
+--- a/src/app/dashboard/wallet/page.tsx
++++ b/src/app/dashboard/wallet/page.tsx
+@@ -26,7 +26,7 @@ function WalletPageContent() {
+   const [customValue, setCustomValue] = useState('');
+   const [loading, setLoading] = useState(false);
+   const [error, setError] = useState<string | null>(null);
+-  const [verifyStatus, setVerifyStatus] = useState<'checking' | 'succeeded' | 'pending' | 'failed' | null>(null);
++  const [verifyStatus, setVerifyStatus] = useState<'checking' | 'succeeded' | 'pending' | 'failed' | 'review' | null>(null);
+ 
+   useEffect(() => {
+     if (!referenceFromRedirect) return;
+@@ -97,6 +97,11 @@ function WalletPageContent() {
+             </p>
+           )}
+           {verifyStatus === 'failed' && <p className="text-sm text-rose-600">This payment didn't go through.</p>}
++          {verifyStatus === 'review' && (
++            <p className="text-sm text-amber-700">
++              We received your payment but need to review it before crediting your wallet. Please contact support with your payment reference.
++            </p>
++          )}
+         </DCard>
+       )}
+ 
+diff --git a/src/lib/payments/wallet.ts b/src/lib/payments/wallet.ts
+index b06752c..0785e9b 100644
+--- a/src/lib/payments/wallet.ts
++++ b/src/lib/payments/wallet.ts
+@@ -1,87 +1,90 @@
+ import { createAdminClient } from '@/lib/supabase/server';
+ 
+-type DebitArgs = {
++type WalletMoveArgs = {
+   userId: string;
+-  amountCents: number;
++  amountCents: number; // wallet units, exactly as stored in profiles.wallet_balance_cents
+   reason: string;
+   referenceType?: string;
+   referenceId?: string;
++  /**
++   * Makes the movement safe to retry: the same key is applied at most once, ever.
++   * ALWAYS pass one for refunds and for anything triggered by a webhook/retryable request.
++   */
++  idempotencyKey?: string;
+ };
+ 
++export class InsufficientFundsError extends Error {
++  constructor() {
++    super('Insufficient wallet balance');
++    this.name = 'InsufficientFundsError';
++  }
++}
++
+ /**
+- * Every product on the platform (numbers today; invoices, tracking, etc.
+- * later) spends from the same wallet through this one lib, instead of each
+- * module rolling its own balance logic. Runs with the service-role client
+- * because it mutates balances outside RLS — only call from trusted server
+- * code (route handlers / server actions), never from the client.
++ * Every product on the platform spends from the same wallet through this one lib.
++ * Balance changes happen ONLY inside the wallet_apply() Postgres function
++ * (migration 0011), which row-locks the wallet, enforces non-negative balance and
++ * writes the ledger row in the same transaction. Never update
++ * profiles.wallet_balance_cents from application code.
++ * Server-only (service role).
+  */
+-export async function debitWallet({ userId, amountCents, reason, referenceType, referenceId }: DebitArgs) {
+-  const supabase = createAdminClient();
+-
+-  const { data: profile, error: profileError } = await supabase
+-    .from('profiles')
+-    .select('wallet_balance_cents')
+-    .eq('id', userId)
+-    .single();
++async function applyMove(type: 'credit' | 'debit', a: WalletMoveArgs) {
++  const admin = createAdminClient();
++  const { data, error } = await admin.rpc('wallet_apply', {
++    p_user: a.userId,
++    p_type: type,
++    p_amount: a.amountCents,
++    p_reason: a.reason,
++    p_ref_type: a.referenceType ?? null,
++    p_ref_id: a.referenceId ?? null,
++    p_key: a.idempotencyKey ?? null
++  });
+ 
+-  if (profileError || !profile) throw new Error('Could not load wallet balance');
+-  if (profile.wallet_balance_cents < amountCents) {
+-    throw new Error('Insufficient wallet balance');
++  if (error) {
++    if (error.message.includes('INSUFFICIENT_FUNDS')) throw new InsufficientFundsError();
++    if (error.message.includes('WALLET_NOT_FOUND')) throw new Error('Could not load wallet balance');
++    throw new Error(`Wallet ${type} failed: ${error.message}`);
+   }
+ 
+-  const newBalance = profile.wallet_balance_cents - amountCents;
+-
+-  const { error: updateError } = await supabase
+-    .from('profiles')
+-    .update({ wallet_balance_cents: newBalance, updated_at: new Date().toISOString() })
+-    .eq('id', userId);
+-
+-  if (updateError) throw updateError;
+-
+-  const { error: txError } = await supabase.from('transactions').insert({
+-    user_id: userId,
+-    type: 'debit',
+-    amount_cents: amountCents,
+-    reason,
+-    reference_type: referenceType,
+-    reference_id: referenceId
+-  });
++  const row = Array.isArray(data) ? data[0] : data;
++  if (!row) throw new Error(`Wallet ${type} returned no result`);
+ 
+-  if (txError) throw txError;
+-
+-  return { newBalanceCents: newBalance };
++  return { newBalanceCents: Number(row.new_balance), applied: Boolean(row.applied) };
+ }
+ 
+-export async function creditWallet({ userId, amountCents, reason, referenceType, referenceId }: DebitArgs) {
+-  const supabase = createAdminClient();
+-
+-  const { data: profile, error: profileError } = await supabase
+-    .from('profiles')
+-    .select('wallet_balance_cents')
+-    .eq('id', userId)
+-    .single();
+-
+-  if (profileError || !profile) throw new Error('Could not load wallet balance');
+-
+-  const newBalance = profile.wallet_balance_cents + amountCents;
++export function debitWallet(args: WalletMoveArgs) {
++  return applyMove('debit', args);
++}
+ 
+-  const { error: updateError } = await supabase
+-    .from('profiles')
+-    .update({ wallet_balance_cents: newBalance, updated_at: new Date().toISOString() })
+-    .eq('id', userId);
++export function creditWallet(args: WalletMoveArgs) {
++  return applyMove('credit', args);
++}
+ 
+-  if (updateError) throw updateError;
++export type SettleOutcome = 'settled' | 'already_settled' | 'not_found' | 'amount_mismatch' | 'not_settleable';
+ 
+-  const { error: txError } = await supabase.from('transactions').insert({
+-    user_id: userId,
+-    type: 'credit',
+-    amount_cents: amountCents,
+-    reason,
+-    reference_type: referenceType,
+-    reference_id: referenceId
++/**
++ * Credits a verified Korapay top-up exactly once (webhook and redirect-verify can race
++ * safely). Caller MUST have verified the charge server-to-server first and passes what
++ * Korapay reported; the credited amount always comes from our own payments row.
++ */
++export async function settlePayment(args: {
++  reference: string;
++  verifiedAmount: number;
++  verifiedCurrency: string;
++}): Promise<{ outcome: SettleOutcome; newBalanceCents: number | null }> {
++  const admin = createAdminClient();
++  const { data, error } = await admin.rpc('settle_payment', {
++    p_reference: args.reference,
++    p_verified_amount: args.verifiedAmount,
++    p_verified_currency: args.verifiedCurrency
+   });
++  if (error) throw new Error(`Payment settlement failed: ${error.message}`);
+ 
+-  if (txError) throw txError;
++  const row = Array.isArray(data) ? data[0] : data;
++  if (!row) throw new Error('Payment settlement returned no result');
+ 
+-  return { newBalanceCents: newBalance };
++  return {
++    outcome: row.outcome as SettleOutcome,
++    newBalanceCents: row.new_balance === null ? null : Number(row.new_balance)
++  };
+ }
+diff --git a/src/lib/supabase/database.types.ts b/src/lib/supabase/database.types.ts
+index aa0ef3d..3ca78ae 100644
+--- a/src/lib/supabase/database.types.ts
++++ b/src/lib/supabase/database.types.ts
+@@ -68,6 +68,8 @@ export type Database = {
+           reason: string;
+           reference_type: string | null;
+           reference_id: string | null;
++          idempotency_key: string | null;
++          balance_after_cents: number | null;
+           created_at: string;
+         };
+         Insert: Partial<Database['public']['Tables']['transactions']['Row']> & {
+@@ -276,6 +278,22 @@ export type Database = {
+     };
+     Views: Record<string, never>;
+     Functions: {
++      wallet_apply: {
++        Args: {
++          p_user: string;
++          p_type: 'credit' | 'debit';
++          p_amount: number;
++          p_reason: string;
++          p_ref_type: string | null;
++          p_ref_id: string | null;
++          p_key: string | null;
++        };
++        Returns: { new_balance: number; applied: boolean }[];
++      };
++      settle_payment: {
++        Args: { p_reference: string; p_verified_amount: number; p_verified_currency: string };
++        Returns: { outcome: string; new_balance: number | null }[];
++      };
+       increment_rate_limit: {
+         Args: { p_key: string; p_window_start: string };
+         Returns: number;
+diff --git a/src/modules/numbers/services/activation-service.ts b/src/modules/numbers/services/activation-service.ts
+index 79c0165..0353c91 100644
+--- a/src/modules/numbers/services/activation-service.ts
++++ b/src/modules/numbers/services/activation-service.ts
+@@ -106,10 +106,16 @@ export async function purchaseActivationNumber({
+   const pricing = await getPricingRuleAsAdmin(product);
+   const quotedPriceCents = applyMarkup(match.costCents, pricing);
+ 
++  // One id ties the debit to its refund, so a retried failure path can never refund twice.
++  const purchaseRef = crypto.randomUUID();
++
+   await debitWallet({
+     userId,
+     amountCents: quotedPriceCents,
+-    reason: 'number_purchase'
++    reason: 'number_purchase',
++    referenceType: 'number_purchase',
++    referenceId: purchaseRef,
++    idempotencyKey: `purchase:${purchaseRef}`
+   });
+ 
+   const admin = createAdminClient();
+@@ -146,10 +152,15 @@ export async function purchaseActivationNumber({
+     // (via cost_cents on the row) the profit baseline — no second debit needed.
+     return row;
+   } catch (err) {
++    // KNOWN RISK (to be replaced by the reserve/reconcile state machine): if the provider call
++    // timed out, a number may exist upstream. This refund is at least now idempotent.
+     await creditWallet({
+       userId,
+       amountCents: quotedPriceCents,
+-      reason: 'number_purchase_refund'
++      reason: 'number_purchase_refund',
++      referenceType: 'number_purchase',
++      referenceId: purchaseRef,
++      idempotencyKey: `purchase_refund:${purchaseRef}`
+     });
+     throw err;
+   }
+@@ -298,6 +309,9 @@ export async function cancelActivationOrder({ userId, orderId }: { userId: strin
+   if (order.status === 'received' || order.status === 'finished') {
+     throw new Error('Cannot cancel — a code was already delivered for this number.');
+   }
++  if (order.status === 'cancelled') {
++    return { refundedCents: 0 }; // already cancelled (and refunded) — never refund twice
++  }
+ 
+   const provider = getActivationProvider();
+   if (order.provider_order_id) {
+@@ -311,7 +325,8 @@ export async function cancelActivationOrder({ userId, orderId }: { userId: strin
+     amountCents: order.price_cents,
+     reason: 'number_cancel_refund',
+     referenceType: 'number_orders',
+-    referenceId: order.id
++    referenceId: order.id,
++    idempotencyKey: `cancel_refund:${order.id}`
+   });
+ 
+   return { refundedCents: order.price_cents };

@@ -4,6 +4,8 @@ import { revalidatePath } from 'next/cache';
 import { requireAdmin } from '@/lib/permissions/permissions';
 import { createAdminClient } from '@/lib/supabase/server';
 import { upsertServiceOverride, deleteServiceOverride } from '@/lib/pricing/number-pricing';
+import { getFxSetting, clearFxRateCache } from '@/lib/pricing/fx-rate';
+import { validateFxRateInput, fxChangeNeedsConfirm } from '@/modules/numbers/lib/naira';
 
 export async function updatePricing(formData: FormData) {
   await requireAdmin();
@@ -77,6 +79,50 @@ export async function removeServiceOverride(formData: FormData) {
 
   await deleteServiceOverride(product);
 
+  revalidatePath('/dashboard/admin/pricing');
+  revalidatePath('/dashboard');
+}
+
+/**
+ * Sets the dollar rate: naira per 1 unit of the currency 5sim bills you in.
+ * New quotes and purchases use it within seconds. Orders already bought keep
+ * the rate they were priced with, so your profit history never rewrites itself.
+ */
+export async function updateFxRate(formData: FormData) {
+  const adminUser = await requireAdmin();
+
+  const rate = validateFxRateInput(formData.get('fx_rate'));
+  const currency = String(formData.get('fx_currency') ?? 'USD').trim().toUpperCase();
+  if (!/^[A-Z]{3,8}$/.test(currency)) throw new Error('Currency must be letters only, like USD or RUB.');
+
+  const before = await getFxSetting();
+  if (fxChangeNeedsConfirm(before.rate, rate) && formData.get('confirm_big_change') !== 'on') {
+    throw new Error(
+      `That is more than 25% away from the current rate (${before.rate}). If it is correct, go back and tick the confirmation box.`
+    );
+  }
+
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from('pricing_settings')
+    .update({
+      fx_rate_ngn_per_unit: rate,
+      fx_currency: currency,
+      updated_by: adminUser.id,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', true);
+  if (error) throw error;
+
+  const { error: auditError } = await admin.from('audit_logs').insert({
+    actor_id: adminUser.id,
+    action: 'pricing.fx_rate_change',
+    target_type: 'pricing_settings',
+    metadata: { previous_rate: before.rate, new_rate: rate, currency }
+  });
+  if (auditError) console.error('audit log failed for fx rate change', auditError.message);
+
+  clearFxRateCache();
   revalidatePath('/dashboard/admin/pricing');
   revalidatePath('/dashboard');
 }

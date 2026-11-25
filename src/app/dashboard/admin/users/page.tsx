@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { getCurrentUserWithRole } from '@/lib/permissions/permissions';
 import { createAdminClient } from '@/lib/supabase/server';
 import { DCard, PageHeader } from '@/components/dashboard/ui';
-import { formatCents } from '@/lib/utils';
+import { formatNaira } from '@/lib/utils';
 
 export default async function DashboardAdminUsersPage() {
   const { user, role } = await getCurrentUserWithRole();
@@ -52,7 +52,7 @@ export default async function DashboardAdminUsersPage() {
                       {u.role}
                     </span>
                   </td>
-                  <td className="px-5 py-3.5 text-slate-800">{formatCents(u.wallet_balance_cents)}</td>
+                  <td className="px-5 py-3.5 text-slate-800">{formatNaira(u.wallet_balance_cents)}</td>
                   <td className="whitespace-nowrap px-5 py-3.5 text-xs text-slate-400">
                     {new Date(u.created_at).toLocaleDateString()}
                   </td>

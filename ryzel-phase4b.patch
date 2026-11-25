@@ -1,0 +1,212 @@
+diff --git a/src/app/dashboard/admin/review/actions.ts b/src/app/dashboard/admin/review/actions.ts
+new file mode 100644
+index 0000000..589b296
+--- /dev/null
++++ b/src/app/dashboard/admin/review/actions.ts
+@@ -0,0 +1,79 @@
++'use server';
++
++import { revalidatePath } from 'next/cache';
++import { requireAdmin } from '@/lib/permissions/permissions';
++import { createAdminClient } from '@/lib/supabase/server';
++import { refundOrder } from '@/modules/numbers/services/order-ledger';
++
++/**
++ * Admin resolution for orders the system could not settle on its own.
++ * Both actions only act on orders that are still unsettled, and every
++ * action leaves an audit_logs row naming the admin.
++ */
++
++async function audit(actorId: string, action: string, orderId: string, metadata: Record<string, unknown>) {
++  const admin = createAdminClient();
++  const { error } = await admin
++    .from('audit_logs')
++    .insert({ actor_id: actorId, action, target_type: 'number_orders', target_id: orderId, metadata });
++  if (error) console.error('audit log failed', action, orderId, error.message);
++}
++
++/**
++ * Refunds the customer in full, exactly once (order_refund refuses a second
++ * refund, and refuses any order that already delivered a code).
++ * Do this only after checking 5sim's own order history for that service/time:
++ * if 5sim DID sell the number, refunding means you absorb its cost.
++ */
++export async function refundReviewOrder(orderId: string) {
++  const adminUser = await requireAdmin();
++
++  const admin = createAdminClient();
++  const { data: order } = await admin.from('number_orders').select('status').eq('id', orderId).single();
++  if (!order || (order.status !== 'needs_review' && order.status !== 'purchasing')) {
++    throw new Error('Only unsettled orders can be refunded from here.');
++  }
++
++  const result = await refundOrder(orderId, 'failed', 'number_purchase_refund_admin');
++  await audit(adminUser.id, 'order.review_refund', orderId, { outcome: result.outcome, refunded: result.refundedNaira });
++
++  revalidatePath('/dashboard/admin/review');
++  revalidatePath('/dashboard/admin');
++}
++
++/**
++ * Puts the order back into the automatic process. With a provider id it goes
++ * back to "waiting for code" (the poller re-checks it); without one it goes
++ * back to "confirming purchase" (the poller re-reads the provider history).
++ */
++export async function retryReviewOrder(orderId: string) {
++  const adminUser = await requireAdmin();
++
++  const admin = createAdminClient();
++  const { data: order } = await admin
++    .from('number_orders')
++    .select('status, provider_order_id')
++    .eq('id', orderId)
++    .single();
++  if (!order || order.status !== 'needs_review') {
++    throw new Error('Only orders under review can be retried.');
++  }
++
++  const now = new Date().toISOString();
++  const nextStatus = order.provider_order_id ? 'awaiting_sms' : 'purchasing';
++  const { error } = await admin
++    .from('number_orders')
++    .update({
++      status: nextStatus,
++      review_note: null,
++      purchase_started_at: order.provider_order_id ? undefined : now,
++      updated_at: now
++    })
++    .eq('id', orderId)
++    .eq('status', 'needs_review');
++  if (error) throw error;
++
++  await audit(adminUser.id, 'order.review_retry', orderId, { nextStatus });
++
++  revalidatePath('/dashboard/admin/review');
++}
+diff --git a/src/app/dashboard/admin/review/page.tsx b/src/app/dashboard/admin/review/page.tsx
+new file mode 100644
+index 0000000..e423510
+--- /dev/null
++++ b/src/app/dashboard/admin/review/page.tsx
+@@ -0,0 +1,99 @@
++import { redirect } from 'next/navigation';
++import { getCurrentUserWithRole } from '@/lib/permissions/permissions';
++import { createAdminClient } from '@/lib/supabase/server';
++import { DCard, DButton, PageHeader, StatusBadge } from '@/components/dashboard/ui';
++import { formatNaira } from '@/lib/utils';
++import { refundReviewOrder, retryReviewOrder } from './actions';
++
++const STUCK_AFTER_MS = 15 * 60_000;
++
++export default async function DashboardAdminReviewPage() {
++  const { user, role } = await getCurrentUserWithRole();
++  if (!user) redirect('/login');
++  if (role !== 'admin') redirect('/dashboard');
++
++  const admin = createAdminClient();
++  const stuckBefore = new Date(Date.now() - STUCK_AFTER_MS).toISOString();
++
++  const { data } = await admin
++    .from('number_orders')
++    .select(
++      'id, status, product, country, operator, price_cents, provider_order_id, phone_number, review_note, purchase_started_at, created_at'
++    )
++    .or(`status.eq.needs_review,and(status.eq.purchasing,purchase_started_at.lt.${stuckBefore})`)
++    .order('created_at', { ascending: true })
++    .limit(100);
++
++  const rows = data ?? [];
++  const held = rows.reduce((sum: number, o) => sum + o.price_cents, 0);
++
++  return (
++    <div className="flex flex-col gap-6">
++      <PageHeader
++        title="Orders needing review"
++        description="Customers here have paid, but the system could not tell whether 5sim really sold the number. Their money is being held, not lost."
++      />
++
++      <DCard>
++        <p className="text-sm text-slate-600">
++          {rows.length === 0 ? (
++            'Nothing needs review right now.'
++          ) : (
++            <>
++              <span className="font-medium text-slate-900">{rows.length}</span> order(s) holding{' '}
++              <span className="font-medium text-slate-900">{formatNaira(held)}</span> of customer money.
++            </>
++          )}
++        </p>
++        <p className="mt-2 text-xs text-slate-500">
++          Before refunding, open your 5sim order history and look for a purchase of that service and country around the
++          time shown. If 5sim DID sell one, refunding means you absorb its cost — use Retry instead and the system will
++          pick it up.
++        </p>
++      </DCard>
++
++      {rows.map((order) => (
++        <DCard key={order.id} className="flex flex-col gap-3">
++          <div className="flex flex-wrap items-center justify-between gap-2">
++            <div className="flex items-center gap-3">
++              <p className="font-medium text-slate-900">
++                {order.product ?? 'service'} · {order.country ?? '—'}
++              </p>
++              <StatusBadge status={order.status} />
++            </div>
++            <p className="font-mono text-sm text-slate-800">{formatNaira(order.price_cents)}</p>
++          </div>
++
++          <dl className="grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
++            <div>Order id: <span className="font-mono">{order.id}</span></div>
++            <div>Started: {new Date(order.purchase_started_at ?? order.created_at).toLocaleString('en-NG')}</div>
++            <div>Provider order: <span className="font-mono">{order.provider_order_id ?? 'none recorded'}</span></div>
++            <div>Operator pool: {order.operator ?? '—'}</div>
++          </dl>
++          {order.review_note && <p className="text-xs text-amber-700">{order.review_note}</p>}
++
++          <div className="flex gap-2">
++            <form
++              action={async () => {
++                'use server';
++                await refundReviewOrder(order.id);
++              }}
++            >
++              <DButton type="submit" variant="secondary">Refund customer</DButton>
++            </form>
++            {order.status === 'needs_review' && (
++              <form
++                action={async () => {
++                  'use server';
++                  await retryReviewOrder(order.id);
++                }}
++              >
++                <DButton type="submit" variant="secondary">Retry automatic check</DButton>
++              </form>
++            )}
++          </div>
++        </DCard>
++      ))}
++    </div>
++  );
++}
+diff --git a/src/components/dashboard/sidebar.tsx b/src/components/dashboard/sidebar.tsx
+index eee11a7..b15cb60 100644
+--- a/src/components/dashboard/sidebar.tsx
++++ b/src/components/dashboard/sidebar.tsx
+@@ -18,7 +18,8 @@ import {
+   Users,
+   Layers,
+   PackageSearch,
+-  FileText
++  FileText,
++  AlertTriangle
+ } from 'lucide-react';
+ import { cn, formatNaira } from '@/lib/utils';
+ 
+@@ -41,6 +42,7 @@ const MAIN_LINKS: NavItem[] = [
+ const ADMIN_LINKS: NavItem[] = [
+   { href: '/dashboard/admin', label: 'Overview', icon: LayoutGrid },
+   { href: '/dashboard/admin/orders', label: 'Orders & Profit', icon: Receipt },
++  { href: '/dashboard/admin/review', label: 'Review Orders', icon: AlertTriangle },
+   { href: '/dashboard/admin/pricing', label: 'Pricing', icon: Tag },
+   { href: '/dashboard/admin/services', label: 'Services', icon: Layers },
+   { href: '/dashboard/admin/packages', label: 'Package Tracker (Admin)', icon: PackageSearch },

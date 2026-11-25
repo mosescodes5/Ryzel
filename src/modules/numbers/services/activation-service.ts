@@ -1,23 +1,26 @@
 import { createAdminClient, createClient } from '@/lib/supabase/server';
-import { debitWallet, creditWallet } from '@/lib/payments/wallet';
 import { getActivationProvider } from '../providers/activation-provider-manager';
 import { getPricingRule, getPricingRuleAsAdmin, applyMarkup } from '@/lib/pricing/number-pricing';
 import { recordInboundSms } from '@/modules/sms/services/sms-service';
 import { sendSms, buildCodeReceivedMessage } from '@/lib/notifications/sms/brevo';
 import type { ActivationOrder } from '../providers/activation-provider';
+import { reserveOrder, refundOrder } from './order-ledger';
+import { getNairaPerUnitOrNull } from '@/lib/pricing/fx-rate';
+import { ProviderError, isDefiniteNonPurchase, customerMessageForRejection } from '../lib/provider-errors';
+import { reconcileBatch, type PurchasingOrder } from '../lib/reconcile';
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
 export type ProductQuote = {
   product: string;
   operator: string;
-  priceCents: number; // what the customer pays (cost + markup)
+  priceNaira: number; // what the customer pays, whole naira (cost + markup)
   quantity: number;
 };
 
 export type OfferQuote = {
   operator: string;
-  priceCents: number; // what the customer pays (cost + markup)
+  priceNaira: number; // what the customer pays, whole naira (cost + markup)
   successRate: number | null;
   quantity: number;
 };
@@ -41,13 +44,13 @@ export async function getProductCatalog(country: string): Promise<ProductQuote[]
       return {
         product: p.product,
         operator: p.operator,
-        priceCents: applyMarkup(p.costCents, pricing),
+        priceNaira: applyMarkup(p.costNaira, pricing),
         quantity: p.quantity
       };
     })
   );
 
-  return priced.sort((a, b) => a.priceCents - b.priceCents);
+  return priced.sort((a, b) => a.priceNaira - b.priceNaira);
 }
 
 /**
@@ -65,20 +68,43 @@ export async function getOfferCatalog(country: string, product: string): Promise
   return offers
     .map((o) => ({
       operator: o.operator,
-      priceCents: applyMarkup(o.costCents, pricing),
+      priceNaira: applyMarkup(o.costNaira, pricing),
       successRate: o.successRate,
       quantity: o.quantity
     }))
-    .sort((a, b) => a.priceCents - b.priceCents);
+    .sort((a, b) => a.priceNaira - b.priceNaira);
 }
 
+/** The purchase is saved and charged, but we have not yet confirmed the number. Money is held, not lost. */
+export class PurchasePendingError extends Error {
+  readonly orderId: string;
+  constructor(orderId: string) {
+    super(
+      'Your purchase is being confirmed with our provider. Check My Orders in a minute: you will get your number, or an automatic refund.'
+    );
+    this.name = 'PurchasePendingError';
+    this.orderId = orderId;
+  }
+}
+
+const RECONCILE_MIN_AGE_MS = 45_000; // give the original request time to finish on its own
+const HISTORY_LIMIT = 100;
+const EXPIRY_GRACE_MS = 30_000;
+
 /**
- * Buys a number for one service (e.g. "telegram") and charges the
- * customer's wallet. The wallet is debited at the *quoted* price before
- * calling the provider; if the provider purchase fails, the debit is
- * reversed. The provider's actual charged cost (which can differ
- * slightly from the quote) is stored as cost_cents so profit reporting
- * reflects reality, not the estimate.
+ * Buys a number for one service and charges the customer's wallet (whole naira).
+ *
+ * Order of operations, chosen so money can never be lost or created:
+ *   1. Re-quote from the provider (never trust a client-supplied price).
+ *   2. order_reserve(): ONE database transaction debits the wallet and creates
+ *      the order as 'purchasing'. There is never a charge without an order row.
+ *   3. Call the provider ONCE (no automatic retry) with a timeout.
+ *   4a. Success            -> record the number, status 'awaiting_sms'.
+ *   4b. Clear refusal (4xx)-> nothing was bought: refund exactly once.
+ *   4c. Anything uncertain (timeout, dropped connection, 5xx, unreadable reply,
+ *       or a database hiccup while saving) -> leave the order 'purchasing'.
+ *       The poller later checks the provider's own history and either adopts
+ *       the number or refunds on positive proof it was never bought.
  */
 export async function purchaseActivationNumber({
   userId,
@@ -93,10 +119,6 @@ export async function purchaseActivationNumber({
 }) {
   const provider = getActivationProvider();
 
-  // Re-quote right before charging rather than trusting a client-supplied
-  // price — matched against the specific operator pool the customer picked
-  // (offers at different operators can have very different prices for the
-  // same product), not just "some price for this product".
   const offers = await provider.listOffers({ country, product });
   const match = offers.find((o) => o.operator === operator) ?? offers[0];
   if (!match || match.quantity < 1) {
@@ -104,108 +126,145 @@ export async function purchaseActivationNumber({
   }
 
   const pricing = await getPricingRuleAsAdmin(product);
-  const quotedPriceCents = applyMarkup(match.costCents, pricing);
+  const priceNaira = applyMarkup(match.costNaira, pricing);
 
-  await debitWallet({
+  const { orderId } = await reserveOrder({
     userId,
-    amountCents: quotedPriceCents,
-    reason: 'number_purchase'
+    priceNaira,
+    provider: provider.name,
+    country,
+    operator: match.operator,
+    product
   });
 
   const admin = createAdminClient();
 
+  let bought: ActivationOrder;
   try {
-    const order = await provider.buyActivation({ country, operator: match.operator, product });
-
-    const expiresAt =
-      order.expiresAt ??
-      new Date(Date.now() + Number(process.env.ORDER_TIMEOUT_SECONDS ?? '600') * 1000).toISOString();
-
-    const { data: row, error } = await admin
-      .from('number_orders')
-      .insert({
-        user_id: userId,
-        provider: provider.name,
-        provider_order_id: order.providerOrderId,
-        phone_number: order.phoneNumber,
-        country,
-        operator: order.operator,
-        product: order.product,
-        status: order.status,
-        price_cents: quotedPriceCents,
-        cost_cents: order.costCents,
-        expires_at: expiresAt,
-        last_checked_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    // Wallet debit above already used quotedPriceCents as both charge and
-    // (via cost_cents on the row) the profit baseline — no second debit needed.
-    return row;
+    bought = await provider.buyActivation({ country, operator: match.operator, product });
   } catch (err) {
-    await creditWallet({
-      userId,
-      amountCents: quotedPriceCents,
-      reason: 'number_purchase_refund'
-    });
-    throw err;
+    if (err instanceof ProviderError && isDefiniteNonPurchase(err.failure)) {
+      await refundOrder(orderId, 'failed', 'number_purchase_refund');
+      throw new Error(customerMessageForRejection(err.failure));
+    }
+    // Uncertain: a number may exist upstream. Keep the money held; the poller settles it.
+    console.error('purchase uncertain', orderId, err instanceof Error ? err.message : err);
+    throw new PurchasePendingError(orderId);
   }
+
+  const expiresAt =
+    bought.expiresAt ??
+    new Date(Date.now() + Number(process.env.ORDER_TIMEOUT_SECONDS ?? '600') * 1000).toISOString();
+
+  const fxRate = await getNairaPerUnitOrNull();
+
+  const { data: row, error } = await admin
+    .from('number_orders')
+    .update({
+      provider_order_id: bought.providerOrderId,
+      phone_number: bought.phoneNumber,
+      operator: bought.operator,
+      product: bought.product,
+      status: bought.status === 'awaiting_sms' ? 'awaiting_sms' : 'purchasing',
+      cost_cents: bought.costNaira,
+      fx_rate: fxRate,
+      expires_at: expiresAt,
+      last_checked_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', orderId)
+    .eq('status', 'purchasing')
+    .select()
+    .single();
+
+  if (error || !row) {
+    // The provider DID sell us a number but we couldn't save it. Never refund here:
+    // the poller will find it in the provider's history and adopt it.
+    console.error('purchase saved-failed', orderId, bought.providerOrderId, error?.message);
+    throw new PurchasePendingError(orderId);
+  }
+
+  return row;
 }
 
+type OrderRow = {
+  id: string;
+  user_id: string;
+  status: string;
+  product: string | null;
+  phone_number: string | null;
+  price_cents: number;
+  provider_order_id?: string | null;
+};
+
 /**
- * Shared by the single-order check (customer clicks "Check for code") and
- * the bulk poller (cron hitting every pending order). Applies a provider
- * result to the DB row: updates status, records a newly-arrived code, and
- * fires the Brevo alert — exactly once per code, regardless of which path
- * triggered the check.
+ * Applies one provider result to an order, exactly once per outcome, no matter
+ * whether the customer's "Check" button or the poller got here first.
+ *
+ *  - code arrived         -> status moves with a conditional update; only the
+ *                            caller that wins the move records the SMS/alert
+ *  - cancelled/expired/
+ *    banned, no code      -> refund via order_refund (exactly once)
+ *  - still waiting        -> just stamp last_checked_at
  */
-async function applyCheckResult(
-  admin: AdminClient,
-  order: { id: string; user_id: string; status: string; product: string | null; phone_number: string | null },
-  result: ActivationOrder
-) {
-  const wasAlreadyReceived = order.status === 'received' || order.status === 'finished';
+async function applyCheckResult(admin: AdminClient, order: OrderRow, result: ActivationOrder) {
+  const now = new Date().toISOString();
+
+  if (result.status === 'received' || result.status === 'finished') {
+    const { data: moved } = await admin
+      .from('number_orders')
+      .update({ status: result.status, last_checked_at: now, updated_at: now })
+      .eq('id', order.id)
+      .in('status', ['awaiting_sms', 'purchasing', 'needs_review'])
+      .select('id');
+
+    const wonTheMove = (moved?.length ?? 0) > 0;
+    if (wonTheMove && result.smsCode) {
+      await recordInboundSms({
+        numberOrderId: order.id,
+        fromNumber: order.product ?? 'unknown',
+        body: result.smsText ?? result.smsCode,
+        receivedAt: now
+      });
+
+      const { data: profile } = await admin
+        .from('profiles')
+        .select('notify_phone_number')
+        .eq('id', order.user_id)
+        .single();
+
+      if (profile?.notify_phone_number) {
+        await sendSms({
+          to: profile.notify_phone_number,
+          content: buildCodeReceivedMessage({
+            phoneNumber: order.phone_number ?? '',
+            product: order.product ?? 'service',
+            code: result.smsCode,
+            text: result.smsText
+          })
+        });
+      }
+    } else if (wonTheMove && !result.smsCode) {
+      console.error('order marked received without a code', order.id);
+    }
+    return;
+  }
+
+  if (result.status === 'cancelled' || result.status === 'expired' || result.status === 'failed') {
+    // Provider says the order is over and no code was delivered: give the money back, once.
+    await refundOrder(order.id, result.status, `number_${result.status}_refund`);
+    return;
+  }
 
   await admin
     .from('number_orders')
-    .update({ status: result.status, last_checked_at: new Date().toISOString() })
-    .eq('id', order.id);
-
-  if (result.status === 'received' && !wasAlreadyReceived && result.smsCode) {
-    await recordInboundSms({
-      numberOrderId: order.id,
-      fromNumber: order.product ?? 'unknown',
-      body: result.smsText ?? result.smsCode,
-      receivedAt: new Date().toISOString()
-    });
-
-    const { data: profile } = await admin
-      .from('profiles')
-      .select('notify_phone_number')
-      .eq('id', order.user_id)
-      .single();
-
-    if (profile?.notify_phone_number) {
-      await sendSms({
-        to: profile.notify_phone_number,
-        content: buildCodeReceivedMessage({
-          phoneNumber: order.phone_number ?? '',
-          product: order.product ?? 'service',
-          code: result.smsCode,
-          text: result.smsText
-        })
-      });
-    }
-  }
+    .update({ last_checked_at: now })
+    .eq('id', order.id)
+    .eq('status', 'awaiting_sms');
 }
 
 /**
- * Polls the provider for a code. If a code has newly arrived, records it
- * in sms_messages, updates the order, and fires a Brevo SMS to the
- * customer's notify_phone_number if they've set one.
+ * Customer clicks "Check for code". Same logic as the poller.
  */
 export async function checkActivationOrder({ userId, orderId }: { userId: string; orderId: string }) {
   const admin = createAdminClient();
@@ -218,6 +277,9 @@ export async function checkActivationOrder({ userId, orderId }: { userId: string
     .single();
 
   if (error || !order) throw new Error('Order not found');
+  if (order.status === 'purchasing') {
+    return { ...order, smsCode: null, smsText: null };
+  }
   if (!order.provider_order_id) throw new Error('This order has no provider reference to check');
 
   const provider = getActivationProvider();
@@ -229,25 +291,128 @@ export async function checkActivationOrder({ userId, orderId }: { userId: string
 }
 
 /**
- * Bulk version for the cron poller: checks every order still awaiting a
- * code (skipping ones already past their provider expiry — those are
- * marked expired without spending a provider call), across every user.
- *
- * Kept deliberately simple: sequential, capped batch size. A busier
- * platform would want a queue and concurrency limits instead of a single
- * cron invocation walking the whole table.
+ * Settles orders stuck in 'purchasing' by comparing them with the provider's
+ * own purchase history. See ../lib/reconcile.ts for the exact rules. Refunds
+ * only on positive proof of absence; anything ambiguous is held for review.
  */
-export async function pollAllPendingOrders({ batchSize = 50 }: { batchSize?: number } = {}) {
-  const admin = createAdminClient();
+async function reconcilePurchasing(admin: AdminClient) {
+  const cutoff = new Date(Date.now() - RECONCILE_MIN_AGE_MS).toISOString();
+  const { data: stuck, error } = await admin
+    .from('number_orders')
+    .select('id, country, product, operator, purchase_started_at, provider')
+    .eq('status', 'purchasing')
+    .lt('purchase_started_at', cutoff)
+    .order('purchase_started_at', { ascending: true })
+    .limit(20);
+
+  if (error) throw error;
+  if (!stuck || stuck.length === 0) return { adopted: 0, refunded: 0, review: 0 };
+
+  const provider = getActivationProvider();
+  const orders: PurchasingOrder[] = stuck
+    .filter((o) => o.provider === provider.name && o.country && o.product && o.purchase_started_at)
+    .map((o) => ({
+      id: o.id,
+      country: o.country as string,
+      product: o.product as string,
+      operator: o.operator ?? 'any',
+      startedAtMs: Date.parse(o.purchase_started_at as string)
+    }));
+  if (orders.length === 0) return { adopted: 0, refunded: 0, review: 0 };
+
+  let upstream: Awaited<ReturnType<typeof provider.listRecentActivations>> = [];
+  let historyFetchedOk = true;
+  try {
+    upstream = await provider.listRecentActivations(HISTORY_LIMIT);
+  } catch (err) {
+    console.error('reconcile: could not read provider history', err instanceof Error ? err.message : err);
+    historyFetchedOk = false;
+  }
+
+  const ids = upstream.map((u) => u.providerOrderId);
+  const claimed = new Set<string>();
+  if (ids.length > 0) {
+    const { data: taken } = await admin
+      .from('number_orders')
+      .select('provider_order_id')
+      .eq('provider', provider.name)
+      .in('provider_order_id', ids);
+    for (const t of taken ?? []) if (t.provider_order_id) claimed.add(t.provider_order_id);
+  }
+
+  const earliest = Math.min(...orders.map((o) => o.startedAtMs));
+  const oldestListed = upstream.length > 0 ? Math.min(...upstream.map((u) => u.createdAtMs)) : Infinity;
+  const historyCoversWindow = upstream.length < HISTORY_LIMIT || oldestListed <= earliest - 60_000;
+
+  const decisions = reconcileBatch({
+    orders,
+    upstream,
+    claimedProviderIds: claimed,
+    historyFetchedOk,
+    historyCoversWindow,
+    nowMs: Date.now()
+  });
+
+  let adopted = 0;
+  let refunded = 0;
+  let review = 0;
   const now = new Date().toISOString();
 
-  // Expire anything past its window without wasting a provider call on it.
-  const { data: expired } = await admin
-    .from('number_orders')
-    .update({ status: 'expired' })
-    .eq('status', 'awaiting_sms')
-    .lt('expires_at', now)
-    .select('id');
+  for (const [orderId, decision] of decisions) {
+    try {
+      if (decision.action === 'adopt') {
+        // Re-read the real order so we store its true phone/expiry/status.
+        const real = await provider.checkOrder(decision.upstream.providerOrderId);
+        const { error: upErr } = await admin
+          .from('number_orders')
+          .update({
+            provider_order_id: real.providerOrderId,
+            phone_number: real.phoneNumber,
+            operator: real.operator,
+            ...(real.costNaira > 0 ? { cost_cents: real.costNaira } : {}), // keep unknown cost unset, never 0
+            status: 'awaiting_sms',
+            expires_at: real.expiresAt,
+            last_checked_at: now,
+            review_note: 'Adopted by reconciliation after an unconfirmed purchase.',
+            updated_at: now
+          })
+          .eq('id', orderId)
+          .eq('status', 'purchasing');
+        if (upErr) throw upErr;
+        adopted += 1;
+      } else if (decision.action === 'refund') {
+        const r = await refundOrder(orderId, 'failed', 'number_purchase_refund');
+        if (r.outcome === 'refunded') refunded += 1;
+      } else if (decision.action === 'review') {
+        await admin
+          .from('number_orders')
+          .update({ status: 'needs_review', review_note: decision.note, updated_at: now })
+          .eq('id', orderId)
+          .eq('status', 'purchasing');
+        review += 1;
+      }
+    } catch (err) {
+      console.error('reconcile step failed', orderId, err instanceof Error ? err.message : err);
+    }
+  }
+
+  return { adopted, refunded, review };
+}
+
+/**
+ * Background job (Cloudflare Cron, every minute):
+ *   1. settle unconfirmed purchases
+ *   2. check every order waiting for a code
+ *   3. for orders past their window: confirm with the provider, then refund once
+ *
+ * A refund only ever follows the PROVIDER confirming the order is over (or the
+ * customer cancelling). A merely stale local clock never refunds anyone.
+ */
+export async function pollAllPendingOrders({ batchSize = 15 }: { batchSize?: number } = {}) {
+  const admin = createAdminClient();
+  const provider = getActivationProvider();
+
+  const reconciled = await reconcilePurchasing(admin);
 
   const { data: pending, error } = await admin
     .from('number_orders')
@@ -258,32 +423,50 @@ export async function pollAllPendingOrders({ batchSize = 50 }: { batchSize?: num
 
   if (error) throw error;
 
-  const provider = getActivationProvider();
   let checked = 0;
   let codesFound = 0;
+  let refunded = 0;
   const errors: string[] = [];
 
   for (const order of pending ?? []) {
-    if (!order.provider_order_id) continue;
+    if (!order.provider_order_id) {
+      await admin
+        .from('number_orders')
+        .update({ status: 'needs_review', review_note: 'Awaiting code but has no provider order id.' })
+        .eq('id', order.id)
+        .eq('status', 'awaiting_sms');
+      continue;
+    }
+
     try {
-      const result = await provider.checkOrder(order.provider_order_id);
+      let result = await provider.checkOrder(order.provider_order_id);
+
+      const pastWindow =
+        order.expires_at !== null && Date.parse(order.expires_at) + EXPIRY_GRACE_MS < Date.now();
+
+      if (result.status === 'awaiting_sms' && pastWindow) {
+        // Window closed with no code: ask the provider to close it, then trust ITS answer.
+        try {
+          await provider.cancelOrder(order.provider_order_id);
+        } catch (err) {
+          errors.push(`${order.id}: cancel after expiry failed (${err instanceof Error ? err.message : 'unknown'})`);
+        }
+        result = await provider.checkOrder(order.provider_order_id);
+      }
+
       await applyCheckResult(admin, order, result);
       checked += 1;
       if (result.status === 'received') codesFound += 1;
+      if (result.status === 'cancelled' || result.status === 'expired' || result.status === 'failed') refunded += 1;
     } catch (err) {
       errors.push(`${order.id}: ${err instanceof Error ? err.message : 'unknown error'}`);
     }
   }
 
-  return {
-    expiredCount: expired?.length ?? 0,
-    checked,
-    codesFound,
-    errors
-  };
+  return { reconciled, checked, codesFound, refundedOrExpired: refunded, errors };
 }
 
-/** Cancels an order and refunds the customer if no code was ever received. */
+/** Cancels an order and refunds the customer (exactly once) if no code was ever received. */
 export async function cancelActivationOrder({ userId, orderId }: { userId: string; orderId: string }) {
   const admin = createAdminClient();
 
@@ -298,23 +481,20 @@ export async function cancelActivationOrder({ userId, orderId }: { userId: strin
   if (order.status === 'received' || order.status === 'finished') {
     throw new Error('Cannot cancel — a code was already delivered for this number.');
   }
+  if (order.status === 'purchasing' || order.status === 'needs_review') {
+    throw new Error('This order is still being confirmed. Please wait a minute; if it fails you are refunded automatically.');
+  }
+  if (order.refunded_at) {
+    return { refundedNaira: 0 }; // already refunded — never twice
+  }
 
   const provider = getActivationProvider();
   if (order.provider_order_id) {
     await provider.cancelOrder(order.provider_order_id);
   }
 
-  await admin.from('number_orders').update({ status: 'cancelled' }).eq('id', order.id);
-
-  await creditWallet({
-    userId,
-    amountCents: order.price_cents,
-    reason: 'number_cancel_refund',
-    referenceType: 'number_orders',
-    referenceId: order.id
-  });
-
-  return { refundedCents: order.price_cents };
+  const r = await refundOrder(order.id, 'cancelled', 'number_cancel_refund');
+  return { refundedNaira: r.outcome === 'refunded' ? r.refundedNaira : 0 };
 }
 
 export async function listActivationOrdersForUser(userId: string) {

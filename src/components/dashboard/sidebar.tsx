@@ -18,9 +18,10 @@ import {
   Users,
   Layers,
   PackageSearch,
-  FileText
+  FileText,
+  AlertTriangle
 } from 'lucide-react';
-import { cn, formatCents } from '@/lib/utils';
+import { cn, formatNaira } from '@/lib/utils';
 
 type NavItem = {
   href: string;
@@ -41,6 +42,7 @@ const MAIN_LINKS: NavItem[] = [
 const ADMIN_LINKS: NavItem[] = [
   { href: '/dashboard/admin', label: 'Overview', icon: LayoutGrid },
   { href: '/dashboard/admin/orders', label: 'Orders & Profit', icon: Receipt },
+  { href: '/dashboard/admin/review', label: 'Review Orders', icon: AlertTriangle },
   { href: '/dashboard/admin/pricing', label: 'Pricing', icon: Tag },
   { href: '/dashboard/admin/services', label: 'Services', icon: Layers },
   { href: '/dashboard/admin/packages', label: 'Package Tracker (Admin)', icon: PackageSearch },
@@ -86,7 +88,7 @@ export function Sidebar({
           Wallet balance
         </p>
         <p className="mt-0.5 text-xl font-semibold text-emerald-950">
-          {formatCents(walletBalanceCents)}
+          {formatNaira(walletBalanceCents)}
         </p>
       </div>
 

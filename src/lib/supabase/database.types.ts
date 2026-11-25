@@ -68,6 +68,8 @@ export type Database = {
           reason: string;
           reference_type: string | null;
           reference_id: string | null;
+          idempotency_key: string | null;
+          balance_after_cents: number | null;
           created_at: string;
         };
         Insert: Partial<Database['public']['Tables']['transactions']['Row']> & {
@@ -107,12 +109,25 @@ export type Database = {
           country: string | null;
           operator: string | null;
           product: string | null;
-          status: 'awaiting_sms' | 'received' | 'active' | 'finished' | 'cancelled' | 'expired' | 'failed';
+          status:
+            | 'purchasing'
+            | 'awaiting_sms'
+            | 'received'
+            | 'active'
+            | 'finished'
+            | 'cancelled'
+            | 'expired'
+            | 'failed'
+            | 'needs_review';
           price_cents: number;
           cost_cents: number;
           renews_at: string | null;
           expires_at: string | null;
           last_checked_at: string | null;
+          purchase_started_at: string | null;
+          fx_rate: number | null;
+          refunded_at: string | null;
+          review_note: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -121,6 +136,18 @@ export type Database = {
           price_cents: number;
         };
         Update: Partial<Database['public']['Tables']['number_orders']['Row']>;
+        Relationships: [];
+      };
+      pricing_settings: {
+        Row: {
+          id: boolean;
+          fx_rate_ngn_per_unit: number | null;
+          fx_currency: string;
+          updated_by: string | null;
+          updated_at: string;
+        };
+        Insert: Partial<Database['public']['Tables']['pricing_settings']['Row']>;
+        Update: Partial<Database['public']['Tables']['pricing_settings']['Row']>;
         Relationships: [];
       };
       number_pricing: {
@@ -276,6 +303,41 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      wallet_apply: {
+        Args: {
+          p_user: string;
+          p_type: 'credit' | 'debit';
+          p_amount: number;
+          p_reason: string;
+          p_ref_type: string | null;
+          p_ref_id: string | null;
+          p_key: string | null;
+        };
+        Returns: { new_balance: number; applied: boolean }[];
+      };
+      settle_payment: {
+        Args: { p_reference: string; p_verified_amount: number; p_verified_currency: string };
+        Returns: { outcome: string; new_balance: number | null }[];
+      };
+      admin_profit_summary: {
+        Args: Record<PropertyKey, never>;
+        Returns: { period: string; orders: number; revenue: number; cost: number }[];
+      };
+      order_reserve: {
+        Args: {
+          p_user: string;
+          p_price: number;
+          p_provider: string;
+          p_country: string;
+          p_operator: string;
+          p_product: string;
+        };
+        Returns: { order_id: string; new_balance: number }[];
+      };
+      order_refund: {
+        Args: { p_order: string; p_final_status: 'cancelled' | 'expired' | 'failed'; p_reason: string };
+        Returns: { outcome: string; refunded: number }[];
+      };
       increment_rate_limit: {
         Args: { p_key: string; p_window_start: string };
         Returns: number;

@@ -1,0 +1,5 @@
+{
+  "extends": "next/core-web-vitals",
+  "ignorePatterns": [".next/", "ryzel-track/", "node_modules/"],
+  "rules": { "react/no-unescaped-entities": "off" }
+}

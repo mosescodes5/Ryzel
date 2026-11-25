@@ -26,7 +26,7 @@ function WalletPageContent() {
   const [customValue, setCustomValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [verifyStatus, setVerifyStatus] = useState<'checking' | 'succeeded' | 'pending' | 'failed' | null>(null);
+  const [verifyStatus, setVerifyStatus] = useState<'checking' | 'succeeded' | 'pending' | 'failed' | 'review' | null>(null);
 
   useEffect(() => {
     if (!referenceFromRedirect) return;
@@ -97,6 +97,11 @@ function WalletPageContent() {
             </p>
           )}
           {verifyStatus === 'failed' && <p className="text-sm text-rose-600">This payment didn't go through.</p>}
+          {verifyStatus === 'review' && (
+            <p className="text-sm text-amber-700">
+              We received your payment but need to review it before crediting your wallet. Please contact support with your payment reference.
+            </p>
+          )}
         </DCard>
       )}
 
